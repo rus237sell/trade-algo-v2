@@ -1,12 +1,13 @@
-"""Fetch free 1-min bars from Tradier sandbox into CSVs for backtesting.
+"""Fetch free 1-min bars into CSVs for backtesting.
 
-The sandbox is free (signup at tradier.com, no funded account needed) and
-includes delayed + historical market data. Live 1-min scalping needs paid
-real-time data; this script is for validating the strategy for free.
+Free sources (no subscription):
+  DATA_SOURCE=alpaca  -> Alpaca free tier (15-min delayed + history).
+                        Needs ALPACA_API_KEY / ALPACA_API_SECRET (paper keys).
+  DATA_SOURCE=tradier  -> Tradier (needs subscription as of Oct 2026).
 
 Usage:
-    export TRADIER_API_KEY=<sandbox token>
-    python fetch_history.py QQQ 2026-09-01 2026-10-03
+    export ALPACA_API_KEY=... ALPACA_API_SECRET=...
+    DATA_SOURCE=alpaca python fetch_history.py QQQ 2026-09-01 2026-10-03
 """
 import csv
 import os
@@ -14,12 +15,25 @@ import sys
 from datetime import datetime, timedelta
 
 from data import TradierData
+from alpaca import AlpacaData
+
+
+def get_data():
+    source = os.getenv("DATA_SOURCE", "alpaca")
+    if source == "alpaca":
+        d = AlpacaData()
+        if d.auth.dry:
+            raise SystemExit("Set ALPACA_API_KEY and ALPACA_API_SECRET "
+                             "(free paper keys from alpaca.markets)")
+        return d
+    d = TradierData(env="sandbox")
+    if d.dry:
+        raise SystemExit("Set TRADIER_API_KEY (requires subscription)")
+    return d
 
 
 def fetch(symbol, start, end, out_path):
-    data = TradierData(env="sandbox")
-    if data.dry:
-        raise SystemExit("Set TRADIER_API_KEY (free sandbox token from tradier.com)")
+    data = get_data()
     rows = []
     cur = start
     while cur <= end:
