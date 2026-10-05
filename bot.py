@@ -6,6 +6,7 @@ Usage:
 """
 import os
 import time
+import json
 from datetime import datetime, time as dtime
 
 import pandas as pd
@@ -56,6 +57,7 @@ class Bot:
         self.guard = DailyGuard(self.cfg.daily_profit_target, self.cfg.max_daily_loss)
         self.cooldowns = Cooldowns(self.cfg.cooldown_minutes)
         self.positions = {}  # symbol -> Position
+        self._last_lag_warn = None
 
     def _session_state(self, now):
         if now.weekday() >= 5:
@@ -118,6 +120,33 @@ class Bot:
         del self.positions[symbol]
         print(f"EXIT {symbol} {pos.side} ({reason}) est_pnl={pnl:+.2f} day={self.guard.pnl:+.2f}")
 
+    def _save_state(self, now, session_state, max_lag_min):
+        """Write a small status file every cycle for status.py / monitoring."""
+        state = {
+            "time": now.isoformat(),
+            "session": session_state,
+            "day_pnl": round(self.guard.pnl, 2),
+            "halted": self.guard.halted(),
+            "positions": [
+                {"symbol": s, "side": p.side, "qty": p.qty, "occ": p.occ}
+                for s, p in self.positions.items()
+            ],
+            "data_lag_min": round(max_lag_min, 1) if max_lag_min is not None else None,
+            "broker": os.getenv("BROKER", self.cfg.broker),
+        }
+        try:
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "state.json"), "w") as f:
+                json.dump(state, f)
+        except Exception:
+            pass
+        if max_lag_min is not None and max_lag_min > 5 and (
+                self._last_lag_warn is None
+                or (now - self._last_lag_warn).total_seconds() > 900):
+            print(f"WARNING: market data is {max_lag_min:.0f} min stale — "
+                  f"signals are delayed (free tier).")
+            self._last_lag_warn = now
+
     def cycle(self):
         now = datetime.now(ET)
         self.guard.reset_if_new_day(now)
@@ -128,16 +157,21 @@ class Bot:
                 df = self._day_bars(sym, now)
                 px = df["close"].iloc[-1] if df is not None else pos.underlying_entry
                 self._exit(sym, pos, "flatten-eod", px)
+            self._save_state(now, state, None)
             return
 
         if state in ("closed", "pre"):
+            self._save_state(now, state, None)
             return
 
+        lags = []
         for symbol in self.cfg.symbols:
             df = self._day_bars(symbol, now)
             if df is None or len(df) < 3:
                 continue
             px = df["close"].iloc[-1]
+            lag = (now - df["time"].iloc[-1].to_pydatetime()).total_seconds() / 60
+            lags.append(lag)
 
             # Manage open position
             if symbol in self.positions:
@@ -160,6 +194,8 @@ class Bot:
             for side, reason in check_signals(df, self.cfg):
                 self._enter(symbol, side, reason, df, now)
                 break  # one entry per symbol per cycle
+
+        self._save_state(now, state, max(lags) if lags else None)
 
     def run(self):
         print("trade-algo-v2 running. Ctrl+C to stop.")
