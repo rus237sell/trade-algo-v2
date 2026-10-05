@@ -18,8 +18,9 @@ Paper-trade the Scalp City 0DTE scalping system: 1-min VWAP / 50-EMA / opening-r
 - Tradier moved behind a subscription (Oct 2026) — adapter kept for later, not the free path.
 
 ## Versions
-- v2.1: free-tier loop - fetch_history.py + backtest on real 1-min bars, no paid data needed.
-- v2.0: initial scaffold. Dry-run mode, Tradier sandbox adapter, backtest harness.
+- v2.4: backtest correctness fixes — regular-session bars only, VWAP/ORB reset daily, cooldown enforced between trades (the first run's -$116k was backtest bugs: extended-hours bars + cumulative VWAP + no cooldown, not the strategy).
+- v2.3: one-command droplet setup script; Alpaca connection checker.
+- v2.2: free Alpaca paper trading path (Tradier went paid).
 
 ## Short results
 - Paper only. No live trades yet. Backtest pending historical 1-min data.
