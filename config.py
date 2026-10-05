@@ -31,6 +31,10 @@ class Config:
     flatten_time: str = "15:45"         # force-close everything (0DTE must not pin)
     poll_seconds: int = 30
 
-    # Broker: "dryrun" logs orders without keys; "tradier" uses Tradier sandbox (paper)
+    # Broker: "dryrun" logs orders without keys; "alpaca" = free paper trading;
+    # "tradier" uses Tradier (sandbox/paper, now requires a subscription)
     broker: str = "dryrun"
     tradier_env: str = "sandbox"
+    # Data: "dryrun" (no data), "alpaca" (free, 15-min delayed + history),
+    # "tradier" (delayed unless subscribed). Env DATA_SOURCE overrides.
+    data_source: str = "dryrun"
