@@ -81,7 +81,7 @@ class Bot:
         df = pd.DataFrame(raw)
         df = df.rename(columns={"open": "open", "high": "high", "low": "low",
                                 "close": "close", "volume": "volume", "time": "time"})
-        df["time"] = pd.to_datetime(df["time"])
+        df["time"] = pd.to_datetime(df["time"], utc=True).dt.tz_convert(ET)
         return df.sort_values("time").reset_index(drop=True)
 
     def _pick_occ(self, symbol, side, underlying_px, today):
@@ -185,7 +185,10 @@ class Bot:
             if df is None or len(df) < 3:
                 continue
             px = df["close"].iloc[-1]
-            lag = (now - df["time"].iloc[-1].to_pydatetime()).total_seconds() / 60
+            bar_t = df["time"].iloc[-1]
+            if bar_t.tzinfo is None:
+                bar_t = ET.localize(bar_t.to_pydatetime())
+            lag = (now - bar_t).total_seconds() / 60
             lags.append(lag)
 
             # Manage open position
