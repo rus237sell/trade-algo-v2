@@ -8,6 +8,7 @@ import os
 import tempfile
 import time
 import json
+import uuid
 from datetime import datetime, time as dtime
 
 import pandas as pd
@@ -109,14 +110,14 @@ class Bot:
         occ, strike = self._pick_occ(symbol, side, px, now.date())
         # Estimate premium for sizing log (live: use quote)
         premium = max(0.5, 0.5 * a)
-        self.broker.place(occ, side, qty, tag=f"v2:{reason}")
+        self.broker.place(occ, side, qty, tag=f"v2:{reason}:{uuid.uuid4().hex[:8]}")
         self.positions[symbol] = Position(occ, side, qty, premium, px, a)
         self.cooldowns.mark(symbol, now)
         print(f"ENTER {symbol} {side} {qty}x {occ} strike={strike} ({reason})")
 
     def _exit(self, symbol, pos, reason, px):
         pnl = pos.est_pnl(px)
-        self.broker.close(pos.occ, pos.qty, tag=f"v2:{reason}")
+        self.broker.close(pos.occ, pos.qty, tag=f"v2:{reason}:{uuid.uuid4().hex[:8]}")
         self.guard.pnl += pnl
         del self.positions[symbol]
         print(f"EXIT {symbol} {pos.side} ({reason}) est_pnl={pnl:+.2f} day={self.guard.pnl:+.2f}")
