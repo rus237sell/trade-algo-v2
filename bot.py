@@ -13,6 +13,7 @@ import pytz
 
 from config import Config
 from data import TradierData
+from alpaca import AlpacaData, AlpacaBroker
 from signals import check_signals, atr
 from risk import DailyGuard, Cooldowns, Position, contracts_for_risk
 from broker import DryRunBroker, TradierBroker, occ_symbol
@@ -28,17 +29,30 @@ def parse_t(s):
 class Bot:
     def __init__(self, cfg=None):
         self.cfg = cfg or Config()
-        if os.getenv("BROKER", self.cfg.broker) == "tradier":
+        broker_name = os.getenv("BROKER", self.cfg.broker)
+        if broker_name == "alpaca":
+            try:
+                self.broker = AlpacaBroker()
+                print("Broker: Alpaca paper (free)")
+            except RuntimeError as e:
+                print(f"Alpaca unavailable ({e}); falling back to dry-run")
+                self.broker = DryRunBroker()
+        elif broker_name == "tradier":
             try:
                 self.broker = TradierBroker(env=self.cfg.tradier_env)
-                print("Broker: Tradier sandbox (paper)")
+                print("Broker: Tradier (paid)")
             except RuntimeError as e:
                 print(f"Tradier unavailable ({e}); falling back to dry-run")
                 self.broker = DryRunBroker()
         else:
             self.broker = DryRunBroker()
             print("Broker: dry-run (no real orders)")
-        self.data = TradierData(env=self.cfg.tradier_env)
+        source = os.getenv("DATA_SOURCE", self.cfg.data_source)
+        if source == "alpaca":
+            self.data = AlpacaData()
+            print("Data: Alpaca (free, 15-min delayed)")
+        else:
+            self.data = TradierData(env=self.cfg.tradier_env)
         self.guard = DailyGuard(self.cfg.daily_profit_target, self.cfg.max_daily_loss)
         self.cooldowns = Cooldowns(self.cfg.cooldown_minutes)
         self.positions = {}  # symbol -> Position
@@ -68,13 +82,21 @@ class Bot:
 
     def _pick_occ(self, symbol, side, underlying_px, today):
         exp = today.strftime("%Y%m%d")
-        chain = self.data.chain(symbol, today.strftime("%Y-%m-%d"))
-        if chain:
-            strikes = sorted({float(o["strike"]) for o in chain})
-            strike = min(strikes, key=lambda s: abs(s - underlying_px))
-        else:
-            strike = round(underlying_px)  # dry-run fallback
         cp = "C" if side == "CALL" else "P"
+        if isinstance(self.data, AlpacaData):
+            contracts = self.data.option_contracts(
+                symbol, today.strftime("%Y-%m-%d"), "call" if cp == "C" else "put")
+            if contracts:
+                c = min(contracts,
+                        key=lambda o: abs(float(o["strike_price"]) - underlying_px))
+                return c["symbol"], float(c["strike_price"])
+        else:
+            chain = self.data.chain(symbol, today.strftime("%Y-%m-%d"))
+            if chain:
+                strikes = sorted({float(o["strike"]) for o in chain})
+                strike = min(strikes, key=lambda s: abs(s - underlying_px))
+                return occ_symbol(symbol, exp, cp, strike), strike
+        strike = round(underlying_px)  # dry-run fallback
         return occ_symbol(symbol, exp, cp, strike), strike
 
     def _enter(self, symbol, side, reason, df, now):
