@@ -5,6 +5,7 @@ Usage:
     BROKER=tradier python bot.py   # Tradier sandbox paper trading
 """
 import os
+import tempfile
 import time
 import json
 from datetime import datetime, time as dtime
@@ -134,10 +135,23 @@ class Bot:
             "data_lag_min": round(max_lag_min, 1) if max_lag_min is not None else None,
             "broker": os.getenv("BROKER", self.cfg.broker),
         }
+        state_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "state.json")
         try:
-            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                   "state.json"), "w") as f:
-                json.dump(state, f)
+            # Atomic write (temp file + rename) so concurrent readers
+            # never see a half-written file.
+            fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(state_path),
+                                            prefix=".state.json.tmp.")
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(state, f)
+                os.replace(tmp_path, state_path)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
         except Exception:
             pass
         if max_lag_min is not None and max_lag_min > 5 and (
