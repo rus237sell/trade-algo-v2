@@ -35,7 +35,11 @@ cd "$OPS" || { log "ERROR: cannot cd $OPS"; exit 1; }
 if ! timeout 60 git pull -q --rebase origin "$BRANCH" 2>>"$LOG"; then
     log "WARN: git pull --rebase failed (continuing)"
 fi
-timeout 60 git push -q origin "$BRANCH" 2>>"$LOG" || log "WARN: git push failed (will retry)"
+for i in 1 2 3; do
+    if timeout 60 git push -q origin "$BRANCH" 2>>"$LOG"; then break; fi
+    log "WARN: git push failed (attempt $i), re-syncing"
+    timeout 60 git pull -q --rebase origin "$BRANCH" 2>>"$LOG" || true
+done
 if ! timeout 60 git fetch -q origin 2>>"$LOG"; then
     log "ERROR: git fetch failed; exiting"
     exit 1
@@ -79,7 +83,11 @@ if git diff --cached --quiet 2>>"$LOG"; then
     log "CMD $ID: nothing to commit (unexpected)"
 else
     git -c user.name="droplet-runner" -c user.email="runner@localhost" commit -qm "result $ID (exit $CODE)" 2>>"$LOG"
-    timeout 60 git push -q origin "$BRANCH" 2>>"$LOG" || log "WARN: result push failed (will retry next run)"
+    for i in 1 2 3; do
+        if timeout 60 git push -q origin "$BRANCH" 2>>"$LOG"; then break; fi
+        log "WARN: result push failed (attempt $i), re-syncing"
+        timeout 60 git pull -q --rebase origin "$BRANCH" 2>>"$LOG" || true
+    done
 fi
 echo "$ID" > "$CURSOR"
 log "CMD $ID: done"
