@@ -12,10 +12,20 @@ Usage:
 import csv
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dtime
+
+import pytz
 
 from data import TradierData
 from alpaca import AlpacaData
+
+ET = pytz.timezone("America/New_York")
+
+
+def in_session(iso):
+    """Regular session only: 9:30-16:00 ET."""
+    t = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(ET).time()
+    return dtime(9, 30) <= t <= dtime(16, 0)
 
 
 def get_data():
@@ -46,6 +56,7 @@ def fetch(symbol, start, end, out_path):
     with open(out_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["time", "open", "high", "low", "close", "volume"])
         w.writeheader()
+        rows = [b for b in rows if in_session(b["time"])]
         for b in rows:
             w.writerow({k: b.get(k) for k in
                         ["time", "open", "high", "low", "close", "volume"]})
