@@ -40,7 +40,7 @@ def run(csv_path):
         if len(orb) < 3:
             continue
         o, h, l, c = orb["open"].iloc[0], orb["high"].max(), orb["low"].min(), orb["close"].iloc[-1]
-        if abs(c - o) < 0.01 * o:  # doji, skip
+        if abs(c - o) < 0.0005 * o:  # doji, skip
             continue
 
         direction = 1 if c > o else -1
