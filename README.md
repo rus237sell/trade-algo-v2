@@ -17,7 +17,15 @@ Paper-trade the Scalp City 0DTE scalping system: 1-min VWAP / 50-EMA / opening-r
 - Honest limit: free data is ~15-min delayed, so live 1-min scalping needs paid real-time data. Validate free, pay only if the backtest earns it.
 - Tradier moved behind a subscription (Oct 2026) — adapter kept for later, not the free path.
 
+## Live paper trading
+- On the droplet: `bash ~/trade-algo-v2/deploy/run_live.sh` (needs ALPACA_API_KEY/SECRET exported; pulls latest code, runs in background, logs to live.log).
+- Watch: `tail -f ~/trade-algo-v2/live.log`
+- Status anytime: `~/trade-algo-v2/.venv/bin/python ~/trade-algo-v2/status.py` — bot state + Alpaca paper equity/positions/recent fills. Paste it in chat for a read.
+- Stop: `pkill -f trade-algo-v2/bot.py`
+- The bot warns in the log if market data is >5 min stale (free tier may be delayed — paper results then prove plumbing, not edge).
+
 ## Versions
+- v2.5: live paper monitoring — state.json heartbeat, status.py, run_live.sh launcher, data-staleness warning.
 - v2.4: backtest correctness fixes — regular-session bars only, VWAP/ORB reset daily, cooldown enforced between trades (the first run's -$116k was backtest bugs: extended-hours bars + cumulative VWAP + no cooldown, not the strategy).
 - v2.3: one-command droplet setup script; Alpaca connection checker.
 - v2.2: free Alpaca paper trading path (Tradier went paid).
