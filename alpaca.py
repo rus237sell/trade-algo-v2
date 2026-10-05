@@ -37,7 +37,10 @@ class AlpacaBroker:
             "type": "market", "time_in_force": "day",
             "client_order_id": tag[:48],
         }, headers=self.auth.headers(), timeout=15)
-        r.raise_for_status()
+        try:
+            r.raise_for_status()
+        except requests.HTTPError as e:
+            raise RuntimeError(f"order failed {r.status_code}: {r.text[:300]}") from e
         return r.json()
 
     def place(self, occ, side, qty, tag):
