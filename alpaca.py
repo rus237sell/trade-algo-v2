@@ -74,7 +74,7 @@ class AlpacaData:
                              params=params, headers=self.auth.headers(), timeout=20)
             r.raise_for_status()
             body = r.json()
-            for b in body.get("bars", []):
+            for b in body.get("bars") or []:  # None on market holidays
                 bars.append({"time": b["t"], "open": b["o"], "high": b["h"],
                              "low": b["l"], "close": b["c"], "volume": b["v"]})
             token = body.get("next_page_token")
