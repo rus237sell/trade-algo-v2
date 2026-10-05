@@ -74,7 +74,7 @@ def run(csv_path, cfg=None, slippage=0.0):
             if exit_px is None:
                 exit_px, j = day["close"].iloc[n - 1], n
             move = (exit_px - entry_px) * d
-            pnl = move * 100 * qty  # underlying points * $100 (1 share = 1 point)
+            pnl = move * qty  # underlying: 1 point = $1/share
             trades += 1
             wins += pnl > 0
             pnl_total += pnl
