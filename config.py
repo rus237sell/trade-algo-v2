@@ -25,6 +25,11 @@ class Config:
     squeeze_pct: float = 0.0005          # skip VWAP cross if |EMA9-EMA21|/price < this
     cooldown_minutes: int = 5           # wait after each trade before next signal
 
+    # Data safety: block NEW entries when the freshest 1-min bar is older than
+    # this (minutes). Free Alpaca data runs ~15-min delayed; 30 means dead feed.
+    # Exits and the EOD flatten keep running so positions are never stranded.
+    max_data_lag_min: float = 30.0
+
     # Session (US Eastern)
     trade_start: str = "09:45"          # entries begin (ORB formed)
     trade_end: str = "15:30"            # no new entries after

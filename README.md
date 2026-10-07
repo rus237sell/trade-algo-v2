@@ -23,6 +23,7 @@ Paper-trade the Scalp City 0DTE scalping system: 1-min VWAP / 50-EMA / opening-r
 - Status anytime: `~/trade-algo-v2/.venv/bin/python ~/trade-algo-v2/status.py` — bot state + Alpaca paper equity/positions/recent fills. Paste it in chat for a read.
 - Stop: `pkill -f trade-algo-v2/bot.py`
 - The bot warns in the log if market data is >5 min stale (free tier may be delayed — paper results then prove plumbing, not edge).
+- Fail-safe: if the freshest 1-min bar is older than 30 min (free tier runs ~15-min delayed), new entries are blocked until data recovers; exits and the 15:45 ET flatten still run. `stale_data` in state.json shows it.
 
 ## Versions
 - v2.5: live paper monitoring — state.json heartbeat, status.py, run_live.sh launcher, data-staleness warning.

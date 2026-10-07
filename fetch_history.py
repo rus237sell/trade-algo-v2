@@ -44,24 +44,23 @@ def get_data():
 
 def fetch(symbol, start, end, out_path):
     data = get_data()
-    total = 0
+    rows = []
+    cur = start
+    while cur <= end:
+        if cur.weekday() < 5:  # weekdays only
+            day_end = cur + timedelta(days=1)
+            bars = data.bars_1min(symbol, cur, min(day_end, end + timedelta(days=1)))
+            rows.extend(bars)
+            print(f"{cur.date()}: {len(bars)} bars")
+        cur += timedelta(days=1)
     with open(out_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["time", "open", "high", "low", "close", "volume"])
         w.writeheader()
-        cur = start
-        while cur <= end:
-            if cur.weekday() < 5:  # weekdays only
-                day_end = cur + timedelta(days=1)
-                bars = data.bars_1min(symbol, cur, min(day_end, end + timedelta(days=1)))
-                for b in bars:
-                    if in_session(b["time"]):
-                        w.writerow({k: b.get(k) for k in
-                                    ["time", "open", "high", "low", "close", "volume"]})
-                        total += 1
-                if cur.day == 1:
-                    print(f"{cur.date()}: {total} bars so far", flush=True)
-            cur += timedelta(days=1)
-    print(f"wrote {total} bars -> {out_path}")
+        rows = [b for b in rows if in_session(b["time"])]
+        for b in rows:
+            w.writerow({k: b.get(k) for k in
+                        ["time", "open", "high", "low", "close", "volume"]})
+    print(f"wrote {len(rows)} bars -> {out_path}")
 
 
 if __name__ == "__main__":

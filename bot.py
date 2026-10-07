@@ -5,10 +5,8 @@ Usage:
     BROKER=tradier python bot.py   # Tradier sandbox paper trading
 """
 import os
-import tempfile
 import time
 import json
-import uuid
 from datetime import datetime, time as dtime
 
 import pandas as pd
@@ -60,6 +58,7 @@ class Bot:
         self.cooldowns = Cooldowns(self.cfg.cooldown_minutes)
         self.positions = {}  # symbol -> Position
         self._last_lag_warn = None
+        self._last_stale_warn = None
 
     def _session_state(self, now):
         if now.weekday() >= 5:
@@ -81,7 +80,7 @@ class Bot:
         df = pd.DataFrame(raw)
         df = df.rename(columns={"open": "open", "high": "high", "low": "low",
                                 "close": "close", "volume": "volume", "time": "time"})
-        df["time"] = pd.to_datetime(df["time"], utc=True).dt.tz_convert(ET)
+        df["time"] = pd.to_datetime(df["time"])
         return df.sort_values("time").reset_index(drop=True)
 
     def _pick_occ(self, symbol, side, underlying_px, today):
@@ -110,25 +109,29 @@ class Bot:
         occ, strike = self._pick_occ(symbol, side, px, now.date())
         # Estimate premium for sizing log (live: use quote)
         premium = max(0.5, 0.5 * a)
-        self.broker.place(occ, side, qty, tag=f"v2:{reason}:{uuid.uuid4().hex[:8]}")
+        self.broker.place(occ, side, qty, tag=f"v2:{reason}")
         self.positions[symbol] = Position(occ, side, qty, premium, px, a)
         self.cooldowns.mark(symbol, now)
         print(f"ENTER {symbol} {side} {qty}x {occ} strike={strike} ({reason})")
 
     def _exit(self, symbol, pos, reason, px):
         pnl = pos.est_pnl(px)
-        self.broker.close(pos.occ, pos.qty, tag=f"v2:{reason}:{uuid.uuid4().hex[:8]}")
+        self.broker.close(pos.occ, pos.qty, tag=f"v2:{reason}")
         self.guard.pnl += pnl
         del self.positions[symbol]
         print(f"EXIT {symbol} {pos.side} ({reason}) est_pnl={pnl:+.2f} day={self.guard.pnl:+.2f}")
 
-    def _save_state(self, now, session_state, max_lag_min):
+    def _save_state(self, now, session_state, max_lag_min, stale_data=False):
         """Write a small status file every cycle for status.py / monitoring."""
         state = {
             "time": now.isoformat(),
             "session": session_state,
-            "day_pnl": round(self.guard.pnl, 2),
-            "halted": self.guard.halted(),
+            # float()/bool(): guard math can hold numpy scalars (est_pnl runs on
+            # pandas floats), which json can't serialize — coerce here so the
+            # state file never gets truncated mid-write.
+            "day_pnl": float(round(self.guard.pnl, 2)),
+            "halted": bool(self.guard.halted()),
+            "stale_data": stale_data,  # fail-safe: entries blocked on dead feed
             "positions": [
                 {"symbol": s, "side": p.side, "qty": p.qty, "occ": p.occ}
                 for s, p in self.positions.items()
@@ -136,23 +139,10 @@ class Bot:
             "data_lag_min": round(max_lag_min, 1) if max_lag_min is not None else None,
             "broker": os.getenv("BROKER", self.cfg.broker),
         }
-        state_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                  "state.json")
         try:
-            # Atomic write (temp file + rename) so concurrent readers
-            # never see a half-written file.
-            fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(state_path),
-                                            prefix=".state.json.tmp.")
-            try:
-                with os.fdopen(fd, "w") as f:
-                    json.dump(state, f)
-                os.replace(tmp_path, state_path)
-            except Exception:
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    pass
-                raise
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "state.json"), "w") as f:
+                json.dump(state, f)
         except Exception:
             pass
         if max_lag_min is not None and max_lag_min > 5 and (
@@ -161,6 +151,21 @@ class Bot:
             print(f"WARNING: market data is {max_lag_min:.0f} min stale — "
                   f"signals are delayed (free tier).")
             self._last_lag_warn = now
+
+    def _stale_check(self, now, state, max_lag):
+        """Fail-safe: block new entries when the data feed is dead.
+
+        Returns True when entries should be blocked. Exits and the EOD
+        flatten keep running so open positions are never stranded."""
+        stale = (state == "open" and max_lag is not None
+                 and max_lag > self.cfg.max_data_lag_min)
+        if stale and (self._last_stale_warn is None
+                      or (now - self._last_stale_warn).total_seconds() > 300):
+            print(f"STALE DATA: freshest bar {max_lag:.0f} min old "
+                  f"(limit {self.cfg.max_data_lag_min:g} min) — "
+                  f"new entries blocked; exits/flatten still run.")
+            self._last_stale_warn = now
+        return stale
 
     def cycle(self):
         now = datetime.now(ET)
@@ -179,17 +184,23 @@ class Bot:
             self._save_state(now, state, None)
             return
 
+        # Fetch today's bars once per symbol, measure data lag first so a
+        # dead feed blocks new entries before any signal is acted on.
+        bars = {}
         lags = []
         for symbol in self.cfg.symbols:
             df = self._day_bars(symbol, now)
             if df is None or len(df) < 3:
                 continue
-            px = df["close"].iloc[-1]
-            bar_t = df["time"].iloc[-1]
-            if bar_t.tzinfo is None:
-                bar_t = ET.localize(bar_t.to_pydatetime())
-            lag = (now - bar_t).total_seconds() / 60
+            bars[symbol] = df
+            lag = (now - df["time"].iloc[-1].to_pydatetime()).total_seconds() / 60
             lags.append(lag)
+
+        max_lag = max(lags) if lags else None
+        stale = self._stale_check(now, state, max_lag)
+
+        for symbol, df in bars.items():
+            px = df["close"].iloc[-1]
 
             # Manage open position
             if symbol in self.positions:
@@ -202,6 +213,8 @@ class Bot:
             # Entries
             if state != "open":
                 continue
+            if stale:
+                continue  # fail-safe: manage exits only until data recovers
             if self.guard.halted():
                 print(f"HALTED for day (pnl={self.guard.pnl:+.2f})")
                 return
@@ -213,7 +226,7 @@ class Bot:
                 self._enter(symbol, side, reason, df, now)
                 break  # one entry per symbol per cycle
 
-        self._save_state(now, state, max(lags) if lags else None)
+        self._save_state(now, state, max_lag, stale_data=stale)
 
     def run(self):
         print("trade-algo-v2 running. Ctrl+C to stop.")
