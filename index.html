@@ -170,6 +170,49 @@ ul.pos { margin: 0; padding-left: 18px; } ul.pos li.hl { background: #fde9b8; }
 .inbox-default { font-size: 16px; color: #7a5a3a; margin-top: 6px; }
 .inbox-note { font-size: 15px; color: #a9b79a; margin-top: 6px; }
 </style>
+<style>
+/* ---------------- daily report */
+.report { margin-bottom: 6px; }
+.rp-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.rp-head h3 { margin: 0; font-size: 22px; color: #3b2414; }
+.kicker { color: var(--muted-2); font-size: 17px; }
+.stamp { font-family: 'Pixelify Sans', monospace; font-weight: 700; color: #b8322a; border: 3px solid #b8322a; border-radius: 4px; padding: 2px 10px; transform: rotate(-6deg); letter-spacing: 2px; font-size: 18px; opacity: .85; flex: none; }
+.livechip { font-family: 'Pixelify Sans', monospace; font-weight: 700; color: #2b6cb0; border: 2px solid #2b6cb0; border-radius: 4px; padding: 1px 8px; font-size: 14px; flex: none; }
+.verdict { margin: 4px 0 10px; padding: 6px 10px; border-radius: 5px; background: var(--parch-2); border: 2px solid var(--parch-edge); }
+.verdict b { font-weight: 400; margin-right: 4px; }
+.verdict.ok b { color: var(--up); } .verdict.bad b { color: var(--dn); }
+.bw { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 8px 0 4px; color: var(--muted-2); }
+.bw b { font-weight: 400; color: var(--ink-2); }
+.curve { margin: 10px 0 4px; } .curve figcaption { color: #6b3410; font-family: 'Pixelify Sans', monospace; font-weight: 700; font-size: 16px; margin-bottom: 2px; }
+.curve svg { width: 100%; height: auto; display: block; background: var(--parch-2); border: 2px solid var(--parch-edge); border-radius: 5px; }
+.curve .line { fill: none; stroke: #3b2414; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.curve .wash.up { fill: var(--up); opacity: .16; } .curve .wash.dn { fill: var(--dn); opacity: .14; }
+.curve .zero-l { stroke: #b99b6a; stroke-width: 1; }
+.curve .end { stroke: var(--parch-2); stroke-width: 2; } .curve .end.up { fill: var(--up); } .curve .end.dn { fill: var(--dn); }
+.curve .endl { font: 17px 'VT323', monospace; fill: #3b2414; }
+.curve .ax { font: 15px 'VT323', monospace; fill: #7a5a3a; }
+.curve .hit { fill: transparent; cursor: default; } .curve .hit:hover { fill: #3b241422; }
+.groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 10px; margin-top: 6px; }
+.gt h4 { margin: 6px 0 4px; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: 1px; }
+td.barcell { position: relative; width: 26%; min-width: 50px; }
+.hb { position: absolute; top: 50%; height: 10px; transform: translateY(-50%); }
+.hb.up { background: var(--up); border-radius: 0 4px 4px 0; } .hb.dn { background: var(--dn); border-radius: 4px 0 0 4px; }
+.health { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 6px; }
+.chip { border-radius: 4px; padding: 1px 8px; font-size: 17px; border: 2px solid; }
+.chip.ok { color: #1f5f3a; border-color: #9cc9a8; background: #eef7ec; }
+.chip.warn { color: #7a4a0a; border-color: #e3b866; background: #fdf3dc; }
+.chip.bad { color: #8a1f17; border-color: #e09a92; background: #fbe6e3; }
+details.trips { margin-top: 8px; } details.trips summary { cursor: pointer; color: #6b3410; font-family: 'Pixelify Sans', monospace; font-weight: 700; font-size: 16px; margin-bottom: 4px; }
+.decs p { margin: 2px 0; }
+.recon { margin-top: 6px; }
+.stepper { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.stepper button { background: #e9cf9f; border: 2px solid var(--wood); border-radius: 4px; width: 32px; height: 28px; cursor: pointer; color: #3b2414; font-size: 20px; line-height: 1; }
+.stepper button:disabled { opacity: .35; cursor: default; }
+.stepper span { min-width: 110px; text-align: center; }
+.house-report { border-bottom: 3px dashed var(--parch-edge); padding-bottom: 8px; margin-bottom: 6px; }
+h3.sec { margin-top: 10px; }
+</style>
 </head>
 <body>
 <div id="paperbanner" style="background:#3a2c07;border-bottom:4px solid #d8a723;color:#ffe9a8;text-align:center;padding:8px 12px;font-size:15px;letter-spacing:1px;font-family:'VT323',monospace;">&#x1F4DD; Russell La&apos;s personal paper trades &mdash; simulated trading, no real money.</div>
@@ -232,8 +275,17 @@ const WORLD_W = 48 * TILE;   // 768
 const WORLD_H = 32 * TILE;   // 512
 const ET_TZ = 'America/New_York';
 const QS = new URLSearchParams(location.search);
-const DEMO = false; // public dashboard: live data only   // opened as a file/preview -> simulated trades
+const DEMO = QS.has('demo') || !/^https?:$/.test(location.protocol);   // opened as a file/preview -> simulated trades
 const SESSION_OVERRIDE = QS.get('session');   // ?session=closed to preview night
+/* ?at=13:05 (or an ISO time) shifts the dashboard's clock - for previewing the after-close report */
+const CLOCK_OFFSET = (() => {
+  const a = QS.get('at'); if (!a) return 0;
+  let t;
+  if (/^\d{1,2}:\d{2}$/.test(a)) { const d = new Date(); const [h, m] = a.split(':').map(Number); d.setHours(h, m, 0, 0); t = d.getTime(); }
+  else t = Date.parse(a);
+  return isNaN(t) ? 0 : t - Date.now();
+})();
+function nowDate() { return new Date(Date.now() + CLOCK_OFFSET); }
 
 function mulberry32(a) {
   return function () {
@@ -251,8 +303,8 @@ const pick = (rnd, arr) => arr[Math.floor(rnd() * arr.length)];
 
 const _etDay = new Intl.DateTimeFormat('en-CA', { timeZone: ET_TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
 const _etHM = new Intl.DateTimeFormat('en-US', { timeZone: ET_TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
-function etDay(d = new Date()) { return _etDay.format(d); }                       // "2026-10-06"
-function etMinutes(d = new Date()) { const [h, m] = _etHM.format(d).split(':').map(Number); return h * 60 + m; }
+function etDay(d = nowDate()) { return _etDay.format(d); }                       // "2026-10-06"
+function etMinutes(d = nowDate()) { const [h, m] = _etHM.format(d).split(':').map(Number); return h * 60 + m; }
 function parseTs(ts) { if (!ts) return null; const d = new Date(ts); return isNaN(d) ? null : d; }
 function dayOfTs(ts) { const d = parseTs(ts); return d ? etDay(d) : null; }
 function weekdayOf(day) { return new Date(day + 'T12:00:00Z').getUTCDay(); }      // 0 = Sunday
@@ -1710,7 +1762,7 @@ function decisionKey(e) { return ['d', e.timestamp, e.rule, e.bot_id ?? '', e.ac
 function loadLocal() {
   const saved = store.get(STORE_PREFIX + 'trades', []);
   const cutoff = addDays(etDay(), -120);
-  Data.trades = (Array.isArray(saved) ? saved : []).filter(t => t && t.timestamp && (dayOfTs(t.timestamp) || '') >= cutoff);
+  Data.trades = DEMO ? [] : (Array.isArray(saved) ? saved : []).filter(t => t && t.timestamp && (dayOfTs(t.timestamp) || '') >= cutoff);  // demo starts clean
   for (const t of Data.trades) Data.storedKeys.add(tradeKey(t));
   Data.roster = store.get(STORE_PREFIX + 'roster', {}) || {};
   World.lotAssign = store.get(STORE_PREFIX + 'lots', {}) || {};
@@ -1932,6 +1984,8 @@ const UI = {
     document.addEventListener('keydown', e => { if (e.key === 'Escape') this.close(); });
     $('#tabs').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) this.open(this.modal.kind, this.modal.arg, b.dataset.tab); });
     $('#places').addEventListener('click', e => { const b = e.target.closest('button[data-place]'); if (b) this.openPlace(b.dataset.place); });
+    $('#modal-body').addEventListener('click', e => { const b = e.target.closest('button[data-rday]'); if (b && b.dataset.rday) { Report.day = b.dataset.rday; this.open('profit', null, 'today', true); } });
+    setInterval(reportTick, 5000); setTimeout(reportTick, 1500);
     $('#villagers').addEventListener('click', e => { const c = e.target.closest('[data-house]'); if (c) this.openPlace('house:' + c.dataset.house); });
     const tip = $('#chart-tip');
     document.addEventListener('pointerover', e => { const b = e.target.closest('[data-tip]'); if (!b) { tip.hidden = true; return; } tip.innerHTML = b.dataset.tip; tip.hidden = false; const r = b.getBoundingClientRect(); tip.style.left = Math.min(window.innerWidth - 190, Math.max(6, r.left + r.width / 2 - 90)) + 'px'; tip.style.top = (r.top - 8) + 'px'; });
@@ -1956,7 +2010,7 @@ const UI = {
   renderClock() {
     const s = currentSession();
     const last = this.ticker[this.ticker.length - 1];
-    const html = `<b>${esc(new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))}</b><span>${esc(SESSION_LABEL[s] || s)}</span>` +
+    const html = `<b>${esc(nowDate().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))}</b><span>${esc(SESSION_LABEL[s] || s)}</span>` +
       (last && Date.now() - last.at < 60000 ? `<em class="${last.cls}">${esc(last.text)}</em>` : '');
     if ($('#clock').innerHTML !== html) $('#clock').innerHTML = html;
   },
@@ -2019,7 +2073,7 @@ const UI = {
     const scroll = refresh ? $('#modal-body').scrollTop : 0;
     this.modal = { kind, arg, tab };
     let title = '', tabs = [], body = '';
-    if (kind === 'profit') { title = 'Profit Room'; tabs = [['today', 'Today'], ['week', 'Week'], ['month', 'Month'], ['proj', 'Projections']]; body = profitPanel(tab || 'today'); }
+    if (kind === 'profit') { if (!refresh && !tab) Report.day = null; title = 'Profit Room'; tabs = [['today', reportStatus(Report.day || defaultReportDay()) === 'final' ? 'Daily Report' : 'Today'], ['week', 'Week'], ['month', 'Month'], ['proj', 'Projections']]; body = profitPanel(tab || 'today'); }
     if (kind === 'house') { const h = World.houses[arg]; title = h ? h.label.replace('HOUSE', 'House') : arg; body = housePanel(arg); }
     if (kind === 'mayor') { title = "Mayor's Office"; body = mayorPanel(); }
     if (kind === 'market') { title = 'Markets'; body = marketPanel(); }
@@ -2056,20 +2110,9 @@ function tile(label, value, sub = '') { return `<div class="tile"><span>${esc(la
 function profitPanel(tab) {
   const today = etDay(), book = dailyBook();
   if (tab === 'today') {
-    const tr = Data.trades.filter(t => dayOfTs(t.timestamp) === today);
-    const closes = tr.filter(t => t.action === 'close');
-    const pnl = closes.reduce((s, t) => s + (Number(t.pnl) || 0), 0);
-    const wins = closes.filter(t => t.pnl > 0).length;
-    const best = closes.reduce((b, t) => (b == null || t.pnl > b.pnl) ? t : b, null);
-    const worst = closes.reduce((b, t) => (b == null || t.pnl < b.pnl) ? t : b, null);
-    const multi = new Set(tr.map(t => t.bot_id)).size > 1;
-    const rows = tr.slice().reverse().map(t => `<tr><td>${esc(fmtTime(t.timestamp))}</td>${multi ? `<td>${esc(Data.botName(t.bot_id))}</td>` : ''}<td><b>${esc(t.symbol)}</b></td><td>${esc(t.side)}</td><td>${esc(t.action)}</td><td class="n">${esc(t.qty)}</td><td class="n">${t.price != null ? '$' + Number(t.price).toFixed(2) : ''}</td><td class="n">${t.action === 'close' ? pnlHtml(t.pnl) : '<span class="muted">open</span>'}</td></tr>`).join('');
-    const reported = Data.bots().reduce((s, b) => { const st = Data.statuses[b]; return st && dayOfTs(st.timestamp) === today ? s + (Number(st.day_pnl) || 0) : s; }, 0);
-    const hasReport = Data.bots().some(b => Data.statuses[b] && dayOfTs(Data.statuses[b].timestamp) === today);
-    const pnlSub = hasReport && Math.abs(reported - pnl) > 1 ? `bot reports ${money(reported, true, false)}` : `${closes.length} closed trades`;
-    return `<div class="tiles">${tile('Day P&L', pnlHtml(pnl), esc(pnlSub))}${tile('Trades', closes.length, `${tr.length - closes.length} opens`)}${tile('Win rate', pct(wins, closes.length), `${wins} of ${closes.length}`)}${tile('Best', best ? pnlHtml(best.pnl, false) : '—', best ? esc(best.symbol + ' ' + fmtTime(best.timestamp)) : '')}${tile('Worst', worst ? pnlHtml(worst.pnl, false) : '—', worst ? esc(worst.symbol + ' ' + fmtTime(worst.timestamp)) : '')}</div>
-      <h3>Today's trades</h3>${rows ? `<div class="tbl"><table><thead><tr><th>Time</th>${multi ? '<th>Bot</th>' : ''}<th>Sym</th><th>Side</th><th>Action</th><th class="n">Qty</th><th class="n">Price</th><th class="n">P&L</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">No trades yet today.</p>'}
-      ${closes.some(t => t.pnl_estimated) ? '<p class="note">P&L is the bot\'s estimate (underlying move × delta), not option fills.</p>' : ''}`;
+    const day = Report.day || defaultReportDay();
+    markRead(day, 'profit');
+    return reportStepper(day) + reportHtml(buildReport(day));
   }
   if (tab === 'week') {
     const mon = mondayOf(today), days = [0, 1, 2, 3, 4].map(i => addDays(mon, i));
@@ -2124,7 +2167,9 @@ function historyNote() {
 function housePanel(sym) {
   const vs = [...Game.villagers.values()].filter(v => v.house === World.houses[sym]);
   if (!vs.length) return '<p class="muted">Nobody lives here yet.</p>';
-  let html = '';
+  const rday = defaultReportDay();
+  markRead(rday, sym);
+  let html = `<div class="house-report">${reportHtml(buildReport(rday, sym), { compact: true })}</div><h3 class="sec">Residents</h3>`;
   for (const bot of [...new Set(vs.map(v => v.bot))]) {
     const s = Data.statuses[bot], a = Data.treasury?.allocations?.[bot], st = Data.botState(bot);
     const day = s && dayOfTs(s.timestamp) === etDay() ? s.day_pnl : (a?.day_pnl_gross ?? 0);
@@ -2162,6 +2207,301 @@ function marketPanel() {
   const lastRows = Object.entries(last).sort().map(([sym, t]) => `<tr><td><b>${esc(sym)}</b></td><td>${esc(t.side)} ${esc(t.action)}</td><td class="n">$${Number(t.price).toFixed(2)}</td><td>${esc(fmtWhen(t.timestamp))}</td></tr>`).join('');
   return `<h3>At the stalls now</h3>${open.length ? `<ul class="pos">${open.map(v => `<li><b>${esc(v.sym)}</b> ${esc(v.position.side)} ×${esc(v.position.qty)} · ${esc(Data.botName(v.bot))}${v.position.price ? ` · in at $${Number(v.position.price).toFixed(2)}` : ''}${v.position.since ? ` · ${esc(fmtTime(v.position.since))}` : ''}</li>`).join('')}</ul>` : '<p class="muted">Nobody is holding a position.</p>'}
     <h3>Last trade per symbol</h3>${lastRows ? `<div class="tbl"><table><tbody>${lastRows}</tbody></table></div>` : '<p class="muted">No trades seen yet.</p>'}`;
+}
+
+/* ============================================================== Daily Report ("the harvest")
+   At the 4:00 PM ET close (1:00 PM PT) the day's report is "ready":
+   - mailbox flags go up on every house that traded, the Profit Room shows a scroll
+   - one toast per day
+   - Profit Room > "Daily Report" tab = whole farm; clicking a house = that ticker's report
+   Before the close the same views show "So far today" (live).
+   If the server publishes reports/<YYYY-MM-DD>.json (see DAILY_REPORT_SPEC.md) it wins over
+   numbers computed here from the trade feed. */
+const CLOSE_ET = 16 * 60, OPEN_ET = 9 * 60 + 30, FLATTEN_ET = 15 * 60 + 45;
+const Report = { day: null, server: {}, fetching: {} };
+
+function signalFamily(reason) {
+  const r = String(reason || '').toLowerCase();
+  if (r.includes('vwap')) return 'VWAP cross';
+  if (r.includes('ema50') || r.includes('ema-50') || r.includes('50ema')) return '50-EMA cross';
+  if (r.includes('orb') || r.includes('range')) return 'Opening range';
+  return r || 'unknown';
+}
+function exitFamily(reason) {
+  const r = String(reason || '').toLowerCase();
+  if (r.includes('stop')) return 'Stop';
+  if (r.includes('profit') || r.includes('target') || r === 'tp') return 'Target';
+  if (r.includes('flat') || r.includes('eod')) return 'Flatten';
+  if (r.includes('time')) return 'Time exit';
+  return r || 'unknown';
+}
+
+/* pair each close with the open before it (one position per bot+ticker at a time) */
+function roundTrips(day) {
+  const ts = t => parseTs(t.timestamp)?.getTime() || 0;
+  const rows = Data.trades.filter(t => dayOfTs(t.timestamp) === day).slice().sort((a, b) => ts(a) - ts(b));
+  const open = {}, trips = [];
+  for (const t of rows) {
+    const sym = String(t.symbol).toUpperCase(), k = t.bot_id + ':' + sym;
+    if (t.action === 'open') { open[k] = t; continue; }
+    if (t.action !== 'close') continue;
+    const o = open[k]; delete open[k];
+    trips.push({
+      bot: t.bot_id, sym, side: t.side, qty: t.qty,
+      openTs: o?.timestamp || null, closeTs: t.timestamp,
+      entry: o ? Number(o.price) : null, exit: Number(t.price), pnl: Number(t.pnl) || 0,
+      signal: o ? signalFamily(o.reason) : 'unknown', exitType: exitFamily(t.reason),
+      hold: o ? (ts(t) - ts(o)) / 60000 : null, estimated: !!t.pnl_estimated,
+    });
+  }
+  return { trips, stillOpen: Object.values(open) };
+}
+
+function statsOf(trips) {
+  const n = trips.length, wins = trips.filter(t => t.pnl > 0), losses = trips.filter(t => t.pnl < 0);
+  const sum = a => a.reduce((s, t) => s + t.pnl, 0);
+  const pnl = sum(trips), grossW = sum(wins), grossL = -sum(losses);
+  const avgWin = wins.length ? grossW / wins.length : null, avgLoss = losses.length ? grossL / losses.length : null;
+  const payoff = avgWin != null && avgLoss ? avgWin / avgLoss : null;
+  let cum = 0, peak = 0, dd = 0;
+  const curve = trips.slice().sort((a, b) => a.closeTs < b.closeTs ? -1 : 1).map(t => { cum += t.pnl; peak = Math.max(peak, cum); dd = Math.max(dd, peak - cum); return { ts: t.closeTs, v: cum, t }; });
+  const holds = trips.filter(t => t.hold != null).map(t => t.hold);
+  return {
+    trades: n, wins: wins.length, losses: losses.length, pnl,
+    win_rate: n ? wins.length / n : null, avg_win: avgWin, avg_loss: avgLoss,
+    payoff, breakeven_win_rate: payoff ? 1 / (1 + payoff) : null,
+    expectancy: n ? pnl / n : null, profit_factor: grossL ? grossW / grossL : (grossW ? Infinity : null),
+    best: trips.reduce((b, t) => !b || t.pnl > b.pnl ? t : b, null), worst: trips.reduce((b, t) => !b || t.pnl < b.pnl ? t : b, null),
+    max_drawdown: dd, avg_hold_min: holds.length ? holds.reduce((a, b) => a + b, 0) / holds.length : null, curve,
+  };
+}
+function groupStats(trips, keyFn) {
+  const g = {}; for (const t of trips) (g[keyFn(t)] ||= []).push(t);
+  return Object.entries(g).map(([key, ts]) => ({ key, ...statsOf(ts) })).sort((a, b) => b.pnl - a.pnl);
+}
+
+function reportStatus(day) {
+  const today = etDay();
+  if (day < today) return 'final';
+  if (day > today || !isWeekday(day)) return 'live';
+  const m = etMinutes();
+  if (m >= CLOSE_ET) return 'final';
+  if (m >= 12 * 60 && currentSession() === 'closed') return 'final';   // early-close days
+  return 'live';
+}
+function reportDays() {
+  const s = new Set(Data.trades.filter(t => t.action === 'close').map(t => dayOfTs(t.timestamp)));
+  const today = etDay(); if (isWeekday(today)) s.add(today);
+  return [...s].filter(Boolean).sort();
+}
+/* during/after today's session -> today; before the open or on weekends -> last day with trades */
+function defaultReportDay() {
+  const today = etDay();
+  if (isWeekday(today) && etMinutes() >= OPEN_ET) return today;
+  const days = reportDays().filter(d => d < today);
+  return days.length ? days[days.length - 1] : today;
+}
+
+function buildReport(day, sym = null) {
+  const { trips, stillOpen } = roundTrips(day);
+  const mine = sym ? trips.filter(t => t.sym === sym) : trips;
+  const rep = {
+    day, sym, status: reportStatus(day), source: 'feed',
+    stats: statsOf(mine), trips: mine,
+    bySym: sym ? null : groupStats(trips, t => t.sym),
+    bySignal: groupStats(mine, t => t.signal), byExit: groupStats(mine, t => t.exitType),
+    decisions: Data.decisions.filter(d => dayOfTs(d.timestamp) === day && (!sym || !d.bot_id || mine.some(t => t.bot === d.bot_id))),
+    health: reportHealth(day, sym, stillOpen),
+    reconciliation: null,
+  };
+  // a server-published report (Bookkeeper agent) is authoritative where present
+  const srv = Report.server[day];
+  if (srv && srv.status) {
+    const part = sym ? srv.houses?.[sym] : srv.farm;
+    if (part) { rep.stats = { ...rep.stats, ...part, curve: rep.stats.curve, best: rep.stats.best, worst: rep.stats.worst }; rep.source = 'server'; rep.status = srv.status === 'final' ? 'final' : rep.status; }
+    if (srv.health) rep.health = { ...rep.health, ...srv.health };
+    if (srv.reconciliation && !sym) rep.reconciliation = srv.reconciliation;
+  }
+  return rep;
+}
+function reportHealth(day, sym, stillOpen) {
+  const today = etDay();
+  const sts = Object.values(Data.statuses).filter(s => dayOfTs(s.timestamp) === day);
+  let positions = sts.flatMap(s => (s.positions || []).map(p => ({ ...p, bot: s.bot_id })));
+  if (sym) positions = positions.filter(p => String(p.symbol).toUpperCase() === sym);
+  const lags = sts.map(s => Number(s.data_lag_min)).filter(v => !isNaN(v));
+  const halts = Data.decisions.filter(d => dayOfTs(d.timestamp) === day && d.action === 'halt_bot').length;
+  const pastFlatten = day < today || etMinutes() >= FLATTEN_ET + 5;
+  return {
+    positions_at_close: pastFlatten ? positions.length : null, open_positions: positions,
+    data_lag_min: lags.length ? Math.max(...lags) : null, halts,
+    pnl_estimated: Data.trades.some(t => dayOfTs(t.timestamp) === day && t.pnl_estimated),
+    unmatched_closes: 0,
+  };
+}
+
+/* optional server report: reports/<day>.json next to index.html */
+function fetchServerReport(day) {
+  if (DEMO || Report.fetching[day] || Report.server[day] !== undefined) return;
+  Report.fetching[day] = true;
+  fetch(`reports/${day}.json`, { credentials: 'same-origin', cache: 'no-store' })
+    .then(r => r.ok ? r.json() : null).then(j => { Report.server[day] = j || null; UI.dirty = true; })
+    .catch(() => { Report.server[day] = null; })
+    .finally(() => { Report.fetching[day] = false; if (Report.server[day] === null && reportStatus(day) === 'live') delete Report.server[day]; });
+}
+
+/* ---------------------------------------------------------- read state + village cues */
+function readState(day) { return store.get(STORE_PREFIX + 'read.' + day, {}) || {}; }
+function markRead(day, key) {
+  if (reportStatus(day) !== 'final') return;
+  const r = readState(day); if (r[key]) return;
+  r[key] = true; store.set(STORE_PREFIX + 'read.' + day, r);
+}
+function cueDay() { const d = defaultReportDay(); return reportStatus(d) === 'final' ? d : null; }
+function unreadHouses(day) {
+  const read = readState(day), traded = new Set(roundTrips(day).trips.map(t => t.sym));
+  return [...traded].filter(s => !read[s] && World.houses[s]);
+}
+function drawReportCues(ctx) {
+  const day = cueDay(); if (!day) return;
+  const bob = Math.round(Math.sin(Game.time * 3) * 1.5);
+  for (const sym of unreadHouses(day)) {
+    const h = World.houses[sym];
+    const mx = h.x + h.w / 2 + 14, my = h.y + h.h + 2;
+    R(ctx, mx + 6, my - 6, 1, 7, '#5a3a20'); R(ctx, mx + 7, my - 6, 4, 3, '#e2443a'); px(ctx, mx + 7, my - 6, '#ff8a70');   // flag up
+    const ex = mx - 2, ey = my - 17 + bob;                                                                                  // envelope
+    R(ctx, ex - 1, ey - 1, 12, 9, '#2a1a10'); R(ctx, ex, ey, 10, 7, '#fffaf0');
+    for (let i = 0; i < 5; i++) { px(ctx, ex + i, ey + i, '#c9a46a'); px(ctx, ex + 9 - i, ey + i, '#c9a46a'); }
+    R(ctx, ex + 4, ey + 4, 2, 2, '#e2443a');
+  }
+  if (!readState(day).profit && roundTrips(day).trips.length) {
+    const d = World.buildings.profit.door;
+    drawBubble(ctx, d.x, d.y - 34, 'scroll', Game.time);
+  }
+}
+function reportTick() {
+  const day = cueDay(); if (!day) return;
+  fetchServerReport(day);
+  if (day === etDay() && !store.get(STORE_PREFIX + 'toast.' + day, false) && roundTrips(day).trips.length) {
+    store.set(STORE_PREFIX + 'toast.' + day, true);
+    UI.toast('📬 Market closed', "Today's report is ready. Tap the Profit Room, or any house with its mailbox flag up.");
+    UI.dirty = true;
+  }
+}
+
+/* ---------------------------------------------------------- rendering */
+const pctTxt = v => v == null ? '—' : Math.round(v * 100) + '%';
+const minTxt = v => v == null ? '—' : v < 1 ? '<1 min' : Math.round(v) + ' min';
+function etToDate(day, minutes) {
+  // the UTC offset for ET on that day, read from Intl (handles DST)
+  const probe = new Date(day + 'T16:00:00Z');
+  const off = etMinutes(probe) - 16 * 60;                       // e.g. -240 in EDT
+  return new Date(Date.parse(day + 'T00:00:00Z') + (minutes - off) * 60000);
+}
+const shortTime = d => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(':00', '');
+
+function pnlCurve(rep) {
+  const pts = rep.stats.curve;
+  if (!pts.length) return '';
+  const W = 640, H = 150, L = 8, Rr = 70, T = 14, B = 26;
+  const x = m => L + (clamp(m, OPEN_ET, CLOSE_ET) - OPEN_ET) / (CLOSE_ET - OPEN_ET) * (W - L - Rr);
+  const vs = [0, ...pts.map(p => p.v)], hi = Math.max(0, ...vs), lo = Math.min(0, ...vs), span = (hi - lo) || 1;
+  const y = v => T + (hi - v) / span * (H - T - B);
+  let d = `M${x(OPEN_ET)},${y(0)}`, prevV = 0;
+  for (const p of pts) { const m = etMinutes(parseTs(p.ts)); d += ` H${x(m).toFixed(1)} V${y(p.v).toFixed(1)}`; prevV = p.v; }
+  const lastM = rep.status === 'final' ? CLOSE_ET : clamp(etMinutes(), OPEN_ET, CLOSE_ET);
+  d += ` H${x(lastM).toFixed(1)}`;
+  const area = d + ` V${y(0)} Z`;
+  const z = y(0).toFixed(1), end = pts[pts.length - 1];
+  const ticks = [OPEN_ET, 11 * 60, 12 * 60 + 30, 14 * 60, CLOSE_ET].map((m, i, a) => `<text x="${x(m)}" y="${H - 6}" text-anchor="${i === 0 ? 'start' : i === a.length - 1 ? 'end' : 'middle'}" class="ax">${esc(shortTime(etToDate(rep.day, m)))}</text>`).join('');
+  const hits = pts.map(p => { const m = etMinutes(parseTs(p.ts)); const tip = `<b>${esc(fmtTime(p.ts))} · ${esc(p.t.sym)} ${esc(p.t.side)}</b><br>${esc(money(p.t.pnl, true))} → day ${esc(money(p.v, true))}`; return `<circle cx="${x(m).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="7" class="hit" data-tip="${esc(tip)}"/>`; }).join('');
+  const id = 'c' + hashStr(rep.day + (rep.sym || ''));
+  return `<figure class="curve"><figcaption>P&amp;L through the day</figcaption>
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Cumulative P&L through the day, ending at ${esc(money(end.v, true))}">
+      <defs><clipPath id="${id}a"><rect x="0" y="0" width="${W}" height="${z}"/></clipPath><clipPath id="${id}b"><rect x="0" y="${z}" width="${W}" height="${H}"/></clipPath></defs>
+      <path d="${area}" class="wash up" clip-path="url(#${id}a)"/><path d="${area}" class="wash dn" clip-path="url(#${id}b)"/>
+      <line x1="${L}" x2="${W - Rr}" y1="${z}" y2="${z}" class="zero-l"/>
+      <path d="${d}" class="line"/>
+      <circle cx="${x(lastM).toFixed(1)}" cy="${y(end.v).toFixed(1)}" r="5" class="end ${end.v >= 0 ? 'up' : 'dn'}"/>
+      <text x="${(x(lastM) + 9).toFixed(1)}" y="${(y(end.v) + 5).toFixed(1)}" class="endl">${esc(moneyShort(end.v))}</text>
+      ${ticks}${hits}
+    </svg></figure>`;
+}
+
+function groupTable(title, rows, opts = {}) {
+  if (!rows.length) return '';
+  const maxAbs = Math.max(1, ...rows.map(r => Math.abs(r.pnl)));
+  const body = rows.map(r => {
+    const w = Math.max(2, Math.round(Math.abs(r.pnl) / maxAbs * 100));
+    const sw = opts.swatch ? `<i class="sw" style="background:${opts.swatch(r.key)}"></i>` : '';
+    const mid = opts.mid === 'avg' ? moneyShort(r.expectancy) : pctTxt(r.win_rate);
+    return `<tr><td>${sw}${esc(r.key)}</td><td class="n">${r.trades}</td><td class="n">${mid}</td>
+      <td class="barcell"><span class="hb ${r.pnl >= 0 ? 'up' : 'dn'}" style="width:${w / 2}%;${r.pnl >= 0 ? 'left:50%' : `right:50%`}"></span></td><td class="n">${pnlHtml(r.pnl)}</td></tr>`;
+  }).join('');
+  return `<div class="gt"><h4>${esc(title)}</h4><div class="tbl"><table><thead><tr><th>${esc(opts.first || '')}</th><th class="n">Trades</th><th class="n">${opts.mid === 'avg' ? 'Avg' : 'Win'}</th><th></th><th class="n">P&amp;L</th></tr></thead><tbody>${body}</tbody></table></div></div>`;
+}
+
+function verdictLine(s) {
+  if (!s.trades) return '';
+  if (s.payoff == null) return `<p class="verdict">${s.losses ? 'No winners today.' : 'Every trade won today.'}</p>`;
+  const ok = s.win_rate >= s.breakeven_win_rate;
+  return `<p class="verdict ${ok ? 'ok' : 'bad'}"><b>${ok ? '✓' : '✗'}</b> Won ${pctTxt(s.win_rate)} of trades. At today's payoff of ${s.payoff.toFixed(2)}× (avg win ÷ avg loss), break-even is ${pctTxt(s.breakeven_win_rate)}.</p>`;
+}
+
+function reportHtml(rep, { compact = false } = {}) {
+  const s = rep.stats, final = rep.status === 'final', h = rep.health;
+  const date = new Date(rep.day + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const closeLocal = shortTime(etToDate(rep.day, CLOSE_ET));
+  const head = `<div class="rp-head"><div><span class="kicker">${final ? `Final · market closed ${esc(closeLocal)}` : 'So far today · live'}</span><h3>${esc(date)}${rep.sym ? ' · ' + esc(rep.sym) : ''}</h3></div>
+    ${final ? '<span class="stamp">FINAL</span>' : '<span class="livechip">LIVE</span>'}</div>`;
+  if (!s.trades) {
+    const why = !isWeekday(rep.day) ? 'Markets are closed on weekends.' : final ? 'No trades closed this day.' : 'No trades have closed yet today.';
+    return `<section class="report">${head}<p class="muted">${why}</p>${healthStrip(rep)}</section>`;
+  }
+  const tiles = `<div class="tiles">
+    ${tile('Day P&L', pnlHtml(s.pnl), rep.source === 'server' ? 'from the daily close file' : `${s.trades} closed trade${s.trades === 1 ? '' : 's'}`)}
+    ${tile('Win rate', pctTxt(s.win_rate), `${s.wins} won · ${s.losses} lost`)}
+    ${tile('Per trade', pnlHtml(s.expectancy), 'average P&L')}
+    ${tile('Profit factor', s.profit_factor == null ? '—' : s.profit_factor === Infinity ? '∞' : s.profit_factor.toFixed(2), '$ won ÷ $ lost')}
+    ${tile('Worst dip', s.max_drawdown ? money(-s.max_drawdown, true, false) : '$0', 'peak-to-trough')}
+    ${compact ? '' : tile('Avg hold', minTxt(s.avg_hold_min), 'open → close')}
+  </div>`;
+  const bw = `<div class="bw">
+    ${s.best ? `<span>Best <b>${pnlHtml(s.best.pnl, false)}</b> ${esc(s.best.sym)} ${esc(fmtTime(s.best.closeTs))}</span>` : ''}
+    ${s.worst ? `<span>Worst <b>${pnlHtml(s.worst.pnl, false)}</b> ${esc(s.worst.sym)} ${esc(fmtTime(s.worst.closeTs))}</span>` : ''}
+    ${s.avg_win != null ? `<span>Avg win <b>${money(s.avg_win, false, false)}</b></span>` : ''}${s.avg_loss != null ? `<span>Avg loss <b>${money(-s.avg_loss, false, false)}</b></span>` : ''}
+  </div>`;
+  const roofOf = sym => (ROOFS[World.houses[sym]?.roof] || ROOFS.brown).base;
+  const groups = `<div class="groups">
+    ${rep.bySym ? groupTable('By house', rep.bySym, { first: 'House', swatch: roofOf }) : ''}
+    ${groupTable('By entry signal', rep.bySignal, { first: 'Signal' })}
+    ${groupTable('By exit', rep.byExit, { first: 'Exit', mid: 'avg' })}
+  </div>`;
+  const recon = rep.reconciliation ? `<div class="recon"><h4>Reconciliation (broker fills)</h4><div class="bw">
+      <span>Bot estimate <b>${money(rep.reconciliation.bot_estimated_pnl, true, false)}</b></span>
+      <span>Broker realized <b>${money(rep.reconciliation.broker_realized_pnl, true, false)}</b></span>
+      <span>Difference <b>${money(rep.reconciliation.difference, true, false)}</b></span>
+      ${rep.reconciliation.avg_slippage_per_contract != null ? `<span>Avg slippage <b>$${Number(rep.reconciliation.avg_slippage_per_contract).toFixed(3)}/contract</b></span>` : ''}</div></div>` : '';
+  const trips = rep.trips.slice().reverse().map(t => `<tr><td>${esc(fmtTime(t.closeTs))}</td><td><b>${esc(t.sym)}</b> ${esc(t.side)}</td><td>${esc(t.signal)} → ${esc(t.exitType)}</td><td class="n">${t.entry != null ? '$' + t.entry.toFixed(2) : '?'} → $${t.exit.toFixed(2)}</td><td class="n">${minTxt(t.hold)}</td><td class="n">${pnlHtml(t.pnl)}</td></tr>`).join('');
+  const decs = rep.decisions.length ? `<div class="decs"><h4>Mayor's decisions</h4>${rep.decisions.map(d => `<p><span class="muted">${esc(fmtTime(d.timestamp))}</span> ${esc(d.reason)}</p>`).join('')}</div>` : '';
+  return `<section class="report">${head}${verdictLine(s)}${tiles}${bw}${pnlCurve(rep)}${groups}${recon}${healthStrip(rep)}
+    <details class="trips" ${compact ? '' : ''}><summary>All ${s.trades} trade${s.trades === 1 ? '' : 's'}</summary><div class="tbl"><table><thead><tr><th>Closed</th><th>Contract</th><th>Signal → exit</th><th class="n">Entry → exit</th><th class="n">Held</th><th class="n">P&amp;L</th></tr></thead><tbody>${trips}</tbody></table></div></details>
+    ${decs}${h.pnl_estimated && rep.source !== 'server' ? '<p class="note">P&amp;L is the bot\'s estimate (underlying move × delta), not option fills.</p>' : ''}</section>`;
+}
+
+function healthStrip(rep) {
+  const h = rep.health, chips = [];
+  if (h.positions_at_close != null) chips.push(h.positions_at_close === 0 ? ['ok', 'Flat at the close'] : ['bad', `${h.positions_at_close} position${h.positions_at_close === 1 ? '' : 's'} still open at the close (ITM options get auto-exercised)`]);
+  if (h.data_lag_min != null) chips.push(h.data_lag_min <= 3 ? ['ok', `Data lag ${h.data_lag_min} min`] : ['warn', `Data lag ${h.data_lag_min} min`]);
+  chips.push(h.halts ? ['warn', `${h.halts} halt${h.halts === 1 ? '' : 's'}`] : ['ok', 'No halts']);
+  if (rep.source === 'server') chips.push(['ok', 'Checked against broker']);
+  return `<div class="health">${chips.map(([k, t]) => `<span class="chip ${k}">${k === 'ok' ? '✓' : k === 'bad' ? '✗' : '!'} ${esc(t)}</span>`).join('')}</div>`;
+}
+
+function reportStepper(day) {
+  const days = reportDays(), i = days.indexOf(day);
+  const prev = i > 0 ? days[i - 1] : null, next = i >= 0 && i < days.length - 1 ? days[i + 1] : null;
+  return `<div class="stepper"><button data-rday="${prev || ''}" ${prev ? '' : 'disabled'} aria-label="Previous trading day">‹</button><span>${esc(day === etDay() ? 'Today' : weekdayName(day) + ' ' + shortDate(day))}</span><button data-rday="${next || ''}" ${next ? '' : 'disabled'} aria-label="Next trading day">›</button></div>`;
 }
 
 /* ============================================================== render loop, lighting, input, demo, boot */
@@ -2316,6 +2656,7 @@ function draw() {
   if (Game.night <= 0.5) drawBugs(ctx, false);
   drawLighting(ctx);
   if (Game.night > 0.5) drawBugs(ctx, true);
+  drawReportCues(ctx);
   for (const a of actors) a.drawTag(ctx);
   drawFloats(ctx);
   drawHover(ctx);
@@ -2335,11 +2676,11 @@ function hoverText(h) {
   if (!h) return '';
   if (h.type === 'building') {
     const b = h.b;
-    if (b.kind === 'profit') return `<b>Profit Room</b><span>Today ${esc(money(dayPnlTotal(), true, false))} · click for stats</span>`;
+    if (b.kind === 'profit') { const cd = cueDay(); return `<b>Profit Room</b><span>${cd && !readState(cd).profit ? '📬 Daily report ready' : `Today ${esc(money(dayPnlTotal(), true, false))} · click for stats`}</span>`; }
     if (b.kind === 'silo') return `<b>Silo</b><span>Reserve ${esc(money(Data.treasury?.reserve, false, false))}</span>`;
     if (b.kind === 'mayor') return `<b>Mayor's Office</b><span>Treasury & decisions</span>`;
     if (b.kind === 'market') return `<b>Markets</b><span>${[...Game.villagers.values()].filter(v => v.position).length} open position(s)</span>`;
-    if (b.kind === 'house') { const vs = [...Game.villagers.values()].filter(v => v.house === b); return `<b>${esc(b.label)}</b><span>${vs.map(v => esc(v.activity)).join(' · ') || 'Empty'}</span>`; }
+    if (b.kind === 'house') { const vs = [...Game.villagers.values()].filter(v => v.house === b); const cd = cueDay(); const mail = cd && unreadHouses(cd).includes(b.sym); return `<b>${esc(b.label)}</b><span>${mail ? '📬 Report ready · ' : ''}${vs.map(v => esc(v.activity)).join(' · ') || 'Empty'}</span>`; }
   }
   if (h.a === Game.mayor) return `<b>The Mayor</b><span>${esc(Game.mayor.activity)}</span>`;
   const v = h.a; return `<b>${esc(v.sym)} · ${esc(Data.botName(v.bot))}</b><span>${esc(v.activity)}</span>`;
@@ -2373,6 +2714,7 @@ const Demo = {
   rnd: mulberry32(Date.now() % 100000),
   gauss() { let u = 0, v = 0; while (!u) u = this.rnd(); while (!v) v = this.rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); },
   start() {
+    this.seedToday();
     Data.conn = 'live'; Game.calmUntil = Game.time + 3;
     // a month of believable history so Week/Month tabs have something to show
     const today = etDay(); let d = addDays(today, -35);
@@ -2391,28 +2733,57 @@ const Demo = {
     const loop = () => { this.tick(); setTimeout(loop, 2500 + this.rnd() * 4500); };
     setTimeout(loop, 1500);
   },
-  now() { return new Date().toISOString().replace(/\.\d+Z$/, 'Z'); },
+  now() { return nowDate().toISOString().replace(/\.\d+Z$/, 'Z'); },
+  session() {
+    if (SESSION_OVERRIDE) return SESSION_OVERRIDE;
+    const m = etMinutes(), wd = isWeekday(etDay());
+    return !wd || m >= CLOSE_ET || m < 4 * 60 ? 'closed' : m < OPEN_ET ? 'pre' : m >= FLATTEN_ET ? 'flatten' : 'open';
+  },
+  /* everything that would already have happened today by "now" (honours ?at=) */
+  seedToday() {
+    const day = etDay(); if (!isWeekday(day)) return;
+    const end = Math.min(etMinutes(), FLATTEN_ET), r = mulberry32(hashStr(day));
+    const reasons = ['vwap-cross-up', 'vwap-cross-dn', 'ema50-cross-up', 'ema50-cross-dn', 'orb-break-up', 'orb-break-dn'];
+    const busy = {};                                       // one position per ticker, like the real bot
+    for (let m = OPEN_ET + 15; m + 4 < end; m += 6 + Math.floor(r() * 14)) {
+      const sym = this.syms[Math.floor(r() * 3)];
+      if ((busy[sym] || 0) > m) continue;
+      const side = r() < 0.5 ? 'CALL' : 'PUT', qty = 20 + Math.floor(r() * 60), price = +(0.7 + r() * 2.2).toFixed(2);
+      const hold = 2 + Math.floor(r() * 18), win = r() < 0.47;
+      const pnl = Math.round((win ? 80 + r() * 380 : -(60 + r() * 260)) * 100) / 100;
+      const exitM = Math.min(m + hold, FLATTEN_ET), flat = exitM === FLATTEN_ET;
+      busy[sym] = exitM + 1;
+      const ts = mm => etToDate(day, mm).toISOString().replace(/\.\d+Z$/, 'Z');
+      const base = { type: 'trade', bot_id: this.bot, bot_name: this.name, symbol: sym, side, qty, replay: true };
+      dispatch({ ...base, timestamp: ts(m), action: 'open', price, reason: pick(r, reasons) }, false);
+      dispatch({ ...base, timestamp: ts(exitM), action: 'close', price: Math.max(0.05, +(price + pnl / (qty * 100)).toFixed(2)), pnl, reason: flat ? 'flatten' : win ? 'take-profit' : 'atr-stop', pnl_estimated: true }, false);
+      this.day += pnl;
+      if (!this.target && this.day >= 500) { this.target = true; const amt = this.day - this.swept; this.swept += amt; this.reserve += amt; dispatch({ type: 'decision', timestamp: ts(exitM), rule: 'profit_target_hit', bot_id: this.bot, action: 'move_to_reserve', amount: Math.round(amt * 100) / 100, reason: `Daily profit target hit; ${money(amt)} moved to reserve, bot keeps trading` }, false); }
+    }
+  },
   tick() {
-    if (this.halted) return;
+    const ses = this.session();
+    if (ses === 'flatten' || ses === 'closed') { const any = Object.keys(this.open).length; for (const sym of Object.keys(this.open)) this.closeOne(sym, 'flatten'); if (any) this.status(); return; }
+    if (this.halted || ses !== 'open') return;
     const sym = this.syms[Math.floor(this.rnd() * 3)];
-    const o = this.open[sym];
-    if (!o) {
+    if (!this.open[sym]) {
       const side = this.rnd() < 0.5 ? 'CALL' : 'PUT', qty = 20 + Math.floor(this.rnd() * 70), price = +(0.6 + this.rnd() * 2.6).toFixed(2);
       this.open[sym] = { side, qty, price };
-      dispatch({ type: 'trade', bot_id: this.bot, bot_name: this.name, timestamp: this.now(), symbol: sym, side, action: 'open', qty, price, reason: 'demo-signal' }, true);
-    } else {
-      delete this.open[sym];
-      const pnl = Math.round((this.gauss() * 260 + 30) * 100) / 100;
-      this.day += pnl;
-      dispatch({ type: 'trade', bot_id: this.bot, bot_name: this.name, timestamp: this.now(), symbol: sym, side: o.side, action: 'close', qty: o.qty, price: Math.max(0.05, +(o.price + pnl / (o.qty * 100)).toFixed(2)), pnl, reason: pnl > 0 ? 'take-profit' : 'atr-stop', pnl_estimated: true }, true);
-      if (!this.target && this.day >= 500) { this.target = true; const amt = this.day - this.swept; this.swept += amt; this.reserve += amt; this.decide('profit_target_hit', 'move_to_reserve', amt, `Daily profit target hit; ${money(amt)} moved to reserve, bot keeps trading`); }
-      if (!this.stop && this.day <= -1000) { this.stop = true; this.halted = true; this.decide('daily_stop_hit', 'halt_bot', 0, 'Daily stop hit; new entries blocked'); setTimeout(() => { this.halted = false; this.decide('manual_resume', 'resume_bot', 0, 'Demo: back to work'); }, 30000); }
-    }
+      dispatch({ type: 'trade', bot_id: this.bot, bot_name: this.name, timestamp: this.now(), symbol: sym, side, action: 'open', qty, price, reason: pick(this.rnd, ['vwap-cross-up', 'ema50-cross-dn', 'orb-break-up']) }, true);
+    } else this.closeOne(sym);
     this.status();
+  },
+  closeOne(sym, why) {
+    const o = this.open[sym]; delete this.open[sym];
+    const pnl = Math.round((this.gauss() * 260 + 30) * 100) / 100;
+    this.day += pnl;
+    dispatch({ type: 'trade', bot_id: this.bot, bot_name: this.name, timestamp: this.now(), symbol: sym, side: o.side, action: 'close', qty: o.qty, price: Math.max(0.05, +(o.price + pnl / (o.qty * 100)).toFixed(2)), pnl, reason: why || (pnl > 0 ? 'take-profit' : 'atr-stop'), pnl_estimated: true }, true);
+    if (!this.target && this.day >= 500) { this.target = true; const amt = this.day - this.swept; this.swept += amt; this.reserve += amt; this.decide('profit_target_hit', 'move_to_reserve', amt, `Daily profit target hit; ${money(amt)} moved to reserve, bot keeps trading`); }
+    if (!this.stop && this.day <= -1000) { this.stop = true; this.halted = true; this.decide('daily_stop_hit', 'halt_bot', 0, 'Daily stop hit; new entries blocked'); setTimeout(() => { this.halted = false; this.decide('manual_resume', 'resume_bot', 0, 'Demo: back to work'); }, 30000); }
   },
   decide(rule, action, amount, reason) { dispatch({ type: 'decision', timestamp: this.now(), rule, bot_id: this.bot, action, amount: Math.round(amount * 100) / 100, reason }, true); },
   status() {
-    dispatch({ type: 'status', bot_id: this.bot, timestamp: this.now(), day_pnl: Math.round(this.day * 100) / 100, halted: this.halted, positions: Object.entries(this.open).map(([symbol, o]) => ({ symbol, side: o.side, qty: o.qty })), data_lag_min: 15, session: SESSION_OVERRIDE || 'open', stale: false }, true);
+    dispatch({ type: 'status', bot_id: this.bot, timestamp: this.now(), day_pnl: Math.round(this.day * 100) / 100, halted: this.halted, positions: Object.entries(this.open).map(([symbol, o]) => ({ symbol, side: o.side, qty: o.qty })), data_lag_min: 1.2, session: this.session(), stale: false }, true);
   },
   treasury() {
     applyTreasury({
