@@ -2846,8 +2846,9 @@ function boot() {
     } catch(e){}
     renderInbox(); UI.dirty = true;
   }
-  Feed.connect = function(){ pollStatic(); setInterval(pollStatic, 30000); };
+  Feed.connect = function(){ if (DEMO) { Demo.start(); return; } pollStatic(); setInterval(pollStatic, 30000); };
   fetchTreasury = async function(){
+    if (DEMO) { Demo.treasury(); return; }
     try { applyTreasury(await getJSON('treasury.json')); } catch(e){}
   };
 })();
