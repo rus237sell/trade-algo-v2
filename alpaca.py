@@ -64,6 +64,16 @@ class AlpacaBroker:
     def close(self, occ, qty, tag):
         return self._order(occ, qty, "sell", tag)  # sell_to_close
 
+    def account_equity(self):
+        """Current account equity. Returns float or None. Never raises."""
+        try:
+            r = requests.get(f"{PAPER_BASE}/v2/account",
+                             headers=self.auth.headers(), timeout=10)
+            eq = r.json().get("equity")
+            return float(eq) if eq else None
+        except Exception:
+            return None
+
     def wait_fill(self, order_id, timeout=15):
         """Poll an order until filled. Returns (filled_avg_price, filled_at)
         or (None, None) on timeout/error. Never raises — trading must not

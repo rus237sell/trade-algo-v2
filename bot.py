@@ -71,6 +71,38 @@ class Bot:
         self.positions = {}  # symbol -> Position
         self._last_lag_warn = None
         self._last_stale_warn = None
+        # Real-P&L bookkeeping
+        self.equity_start = None   # equity at first cycle of the day
+        self._pnl_day = None       # day the counters below belong to
+        self._est_closes = 0       # closes today that fell back to estimated P&L
+
+    def _pnl_snapshot(self, now):
+        """Real P&L components for the dashboard. Never raises; anything
+        that can't be measured comes back None and the UI marks it estimated."""
+        if self._pnl_day != now.date():
+            self._pnl_day, self._est_closes = now.date(), 0
+        snap = {"unrealized": None, "equity_start": self.equity_start,
+                "equity_now": None}
+        try:
+            if hasattr(self.broker, "account_equity"):
+                if self.equity_start is None:
+                    self.equity_start = self.broker.account_equity()
+                snap["equity_start"] = self.equity_start
+                snap["equity_now"] = self.broker.account_equity()
+            if not self.positions:
+                snap["unrealized"] = 0.0
+            elif hasattr(self.data, "option_quote"):
+                total, ok = 0.0, False
+                for pos in self.positions.values():
+                    bid, _ = self.data.option_quote(pos.occ)
+                    base = getattr(pos, "entry_fill", None) or pos.entry_premium
+                    if bid is not None and base:
+                        total += (bid - base) * 100 * pos.qty
+                        ok = True
+                snap["unrealized"] = round(total, 2) if ok else None
+        except Exception:
+            pass
+        return snap
 
     def _session_state(self, now):
         if now.weekday() >= 5:
@@ -182,6 +214,8 @@ class Bot:
         if exit_fill is not None and entry_fill is not None:
             real = round((exit_fill - entry_fill) * 100 * pos.qty, 2)
         pnl_for_guard = real if real is not None else est
+        if real is None:
+            self._est_closes += 1
         self.guard.pnl += pnl_for_guard
         del self.positions[symbol]
         emit_trade({"action": "close", "symbol": symbol, "side": pos.side, "qty": int(pos.qty),
@@ -196,15 +230,24 @@ class Bot:
         rpnl = f"{real:+.2f}" if real is not None else "n/a"
         print(f"EXIT {symbol} {pos.side} ({reason}) real_pnl={rpnl} est_pnl={est:+.2f} day={self.guard.pnl:+.2f}")
 
-    def _save_state(self, now, session_state, max_lag_min, stale_data=False):
+    def _save_state(self, now, session_state, max_lag_min, stale_data=False, snap=None):
         """Write a small status file every cycle for status.py / monitoring."""
+        snap = snap or {}
+        unreal = snap.get("unrealized")
+        day_pnl = float(round(self.guard.pnl, 2))
         state = {
             "time": now.isoformat(),
             "session": session_state,
             # float()/bool(): guard math can hold numpy scalars (est_pnl runs on
             # pandas floats), which json can't serialize — coerce here so the
             # state file never gets truncated mid-write.
-            "day_pnl": float(round(self.guard.pnl, 2)),
+            "day_pnl": day_pnl,  # realized today (real fills when captured)
+            "unrealized_pnl": unreal,  # open positions at live bids (None = unknown)
+            "day_pnl_total": round(day_pnl + (unreal or 0), 2),
+            # pnl_live: every number on screen is real — no estimates involved.
+            "pnl_live": bool(unreal is not None and self._est_closes == 0),
+            "equity_start": snap.get("equity_start"),
+            "equity_now": snap.get("equity_now"),
             "halted": bool(self.guard.halted()),
             "stale_data": stale_data,  # fail-safe: entries blocked on dead feed
             "positions": [
@@ -246,17 +289,18 @@ class Bot:
         now = datetime.now(ET)
         self.guard.reset_if_new_day(now)
         state = self._session_state(now)
+        snap = self._pnl_snapshot(now)
 
         if state == "flatten":
             for sym, pos in list(self.positions.items()):
                 df = self._day_bars(sym, now)
                 px = df["close"].iloc[-1] if df is not None else pos.underlying_entry
                 self._exit(sym, pos, "flatten-eod", px)
-            self._save_state(now, state, None)
+            self._save_state(now, state, None, snap=snap)
             return
 
         if state in ("closed", "pre"):
-            self._save_state(now, state, None)
+            self._save_state(now, state, None, snap=snap)
             return
 
         # Fetch today's bars once per symbol, measure data lag first so a
@@ -301,7 +345,7 @@ class Bot:
                 self._enter(symbol, side, reason, df, now)
                 break  # one entry per symbol per cycle
 
-        self._save_state(now, state, max_lag, stale_data=stale)
+        self._save_state(now, state, max_lag, stale_data=stale, snap=snap)
 
     def run(self):
         print("trade-algo-v2 running. Ctrl+C to stop.")
