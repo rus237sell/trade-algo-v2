@@ -1,0 +1,36 @@
+{
+ "status": "final",
+ "generated_at": "2026-10-08T17:35:51.394933-04:00",
+ "source": "alpaca-fills",
+ "farm": {
+  "trades": 0,
+  "wins": 0,
+  "losses": 0,
+  "pnl": 0,
+  "win_rate": null,
+  "avg_win": null,
+  "avg_loss": null,
+  "payoff": null,
+  "breakeven_win_rate": null,
+  "expectancy": null,
+  "profit_factor": null,
+  "max_drawdown": null,
+  "avg_hold_min": null
+ },
+ "houses": {},
+ "health": {
+  "positions_at_close": 0,
+  "open_positions": [],
+  "data_lag_min": null,
+  "halts": null,
+  "pnl_estimated": true,
+  "unmatched_closes": 0
+ },
+ "reconciliation": {
+  "bot_estimated_pnl": 0.0,
+  "broker_realized_pnl": 0,
+  "difference": 0.0,
+  "avg_slippage_per_contract": null,
+  "contracts_closed": 0
+ }
+}
