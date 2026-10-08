@@ -1,431 +1,2503 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Trade Farm v1</title>
-<!--
-  TRADE FARM DASHBOARD v1 — file-based edition.
-  Reads ./state.json (same directory) every 30s. No WebSocket, no auth, no backend needed.
-
-  state.json SCHEMA (all fields optional except where noted; missing = "unknown", never faked):
-  {
-    "schema": "trade-farm-dashboard-v1",
-    "updated_at": "2026-10-08T12:00:00-04:00",   // REQUIRED: when this snapshot was written (ISO8601)
-    "feed":   { "alive": true, "source": "alpaca", "data_age_min": 1.2, "data_lag_min": 1.2, "stale": false },
-    "session": { "state": "open", "session_date": "2026-10-08", "flatten_et": "15:45" },
-    "treasury": { "total": 100039.24, "reserve": 0, "withdrawn": 0,
-                  "allocations": { "scalp-city": { "bot_name": "Scalp City", "allocated": 100000,
-                                    "day_pnl": 39.24, "day_pnl_gross": 39.24, "streak": 0, "halted": false } } },
-    "farmers": [ { "bot_id": "scalp-city", "bot_name": "Scalp City", "day_pnl": 39.24,
-                   "halted": false, "halt_reason": null, "session": "open",
-                   "data_lag_min": 1.2, "stale_data": false,
-                   "positions": [ {"symbol":"QQQ","side":"CALL","qty":48,"occ":"QQQ261008C00740000"} ] } ],
-    "limits":  { "profit_target": 500, "daily_stop": -1000, "profit_swept_today": 0 },
-    "red_switch": { "tripped": false, "reason": null, "tripped_at": null },
-    "decisions": [ { "timestamp": "...", "rule": "bot_registered", "action": "allocate",
-                     "bot_id": "scalp-city", "amount": 100000, "reason": "..." } ]
-  }
-  Offline rule: if state.json can't be fetched, or updated_at is older than 10 minutes,
-  the page shows a FEED DOWN banner and renders the last good snapshot from localStorage
-  labeled "last known". If there is no snapshot at all, it says so honestly. Numbers are
-  never invented.
--->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1d2e23">
+<title>Scalp City Farm</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%235da83a'/%3E%3Crect x='3' y='7' width='10' height='7' fill='%23c48a56'/%3E%3Cpath d='M2 8 8 2l6 6z' fill='%23b9453c'/%3E%3Crect x='7' y='10' width='2' height='4' fill='%235e3a1f'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@500;700&family=VT323&display=swap" rel="stylesheet">
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { background: #1a2e1a; font-family: 'Press Start 2P', monospace; color: #f5e6c8; font-size: 11px; }
-#topbar { background: #2d4a2d; border-bottom: 4px solid #1a2e1a; padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-#topbar h1 { font-size: 14px; color: #ffd75e; text-shadow: 2px 2px 0 #5a3a1a; }
-#topbar .stats { display: flex; gap: 20px; font-size: 10px; align-items: center; flex-wrap: wrap; }
-.stat-label { color: #a8d5a8; }
-#conn { padding: 4px 8px; border: 2px solid #5a3a1a; background: #3a2a1a; }
-#conn.live { background: #2d6a2d; border-color: #7dd87d; }
-#conn.dead { background: #6a2d2d; border-color: #d87d7d; }
-#feedbanner { display: none; background: #6a2d2d; border-bottom: 4px solid #d87d7d; color: #ffd0d0; padding: 10px 16px; font-size: 10px; line-height: 1.7; }
-#redbanner { display: none; background: #5a1010; border-bottom: 4px solid #ff3b3b; color: #ffe0e0; padding: 12px 16px; font-size: 11px; line-height: 1.7; }
-#main { display: flex; height: calc(100vh - 60px); }
-#farm-wrap { flex: 1; position: relative; background: #0d1a0d; display: flex; align-items: center; justify-content: center; }
-#farm { image-rendering: pixelated; max-width: 100%; max-height: 100%; border: 4px solid #5a3a1a; }
-#side { width: 340px; background: #2d4a2d; border-left: 4px solid #1a2e1a; display: flex; flex-direction: column; overflow-y: auto; }
-.panel { padding: 12px; border-bottom: 3px solid #1a2e1a; }
-.panel h2 { font-size: 11px; color: #ffd75e; margin-bottom: 10px; text-shadow: 1px 1px 0 #5a3a1a; }
-.trow { display: flex; justify-content: space-between; font-size: 10px; margin: 5px 0; }
-.bot-card { background: #3a5a3a; border: 2px solid #5a3a1a; padding: 8px; margin-bottom: 8px; }
-.bot-card .bname { color: #ffd75e; font-size: 10px; margin-bottom: 6px; }
-.bot-card .brow { display: flex; justify-content: space-between; font-size: 9px; margin: 3px 0; }
-.pos { color: #7dd87d; } .neg { color: #ff8a8a; }
-.halted-badge { background: #6a2d2d; color: #ffb0b0; padding: 2px 6px; font-size: 8px; }
-.stale-badge { background: #6a5a2d; color: #ffe9a8; padding: 2px 6px; font-size: 8px; }
-.bar { height: 10px; background: #1a2e1a; border: 2px solid #5a3a1a; margin: 4px 0 8px; position: relative; }
-.bar > div { height: 100%; }
-.bar .mark { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #f5e6c8; }
-.decision { background: #3a2a1a; border: 2px solid #5a3a1a; padding: 8px; margin-bottom: 8px; font-size: 9px; line-height: 1.6; }
-.decision .dtime { color: #a8a8a8; font-size: 8px; }
-.decision.profit { border-color: #7dd87d; } .decision.loss { border-color: #d87d7d; }
-#toast { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); background: #3a2a1a; border: 3px solid #ffd75e; padding: 12px 20px; font-size: 11px; display: none; z-index: 10; }
-#nodata { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); background: #3a2a1a; border: 3px solid #5a3a1a; padding: 24px 32px; font-size: 11px; line-height: 2; text-align: center; display: none; z-index: 5; }
-.small { font-size: 8px; color: #a8d5a8; }
+:root {
+  --bg: #132019; --bar: #1c2d22; --panel: #24382b; --panel-hi: #34503d; --edge: #0c140f;
+  --ink: #f3ecd8; --muted: #a9b79a; --gold: #f5c542; --wood: #5b3a1e; --wood-l: #c48a46;
+  --up-d: #86bdff; --dn-d: #ff8f80;              /* polarity marks on dark */
+  --parch: #f6e7c8; --parch-2: #fbf2df; --parch-edge: #d9b77e; --ink-2: #3b2414; --muted-2: #7a5a3a;
+  --up: #2b6cb0; --dn: #c0392b;                   /* polarity marks on parchment (validated) */
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); }
+body { font: 20px/1.15 'VT323', ui-monospace, Menlo, monospace; -webkit-font-smoothing: antialiased; font-variant-ligatures: none; }
+button { font: inherit; color: inherit; }
+h1, h2, h3, h4 { font-family: 'Pixelify Sans', 'VT323', ui-monospace, monospace; font-weight: 700; font-variant-ligatures: none; }
+
+/* ---------------- top bar */
+.top { display: flex; align-items: center; gap: 18px; padding: 8px 14px; background: var(--bar); border-bottom: 2px solid var(--edge); flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 10px; }
+.logo { width: 26px; height: 26px; image-rendering: pixelated; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' shape-rendering='crispEdges'%3E%3Crect x='3' y='7' width='10' height='7' fill='%23c48a56'/%3E%3Cpath d='M2 8 8 2l6 6z' fill='%23b9453c'/%3E%3Crect x='7' y='10' width='2' height='4' fill='%235e3a1f'/%3E%3Crect x='4' y='9' width='2' height='2' fill='%2386c9ee'/%3E%3Crect x='10' y='9' width='2' height='2' fill='%2386c9ee'/%3E%3Crect x='1' y='14' width='14' height='2' fill='%235da83a'/%3E%3C/svg%3E") center/contain no-repeat; }
+.top h1 { margin: 0; font-size: 26px; color: var(--gold); letter-spacing: .5px; text-shadow: 2px 2px 0 #000a; }
+.stats { display: flex; gap: 22px; margin-left: auto; flex-wrap: wrap; }
+.stat { display: flex; gap: 8px; align-items: baseline; }
+.stat > span { color: var(--muted); }
+.stat > b { font-weight: 400; font-size: 24px; font-variant-numeric: tabular-nums; }
+.live { font-family: 'Pixelify Sans', monospace; font-weight: 700; font-size: 16px; padding: 4px 10px; border: 2px solid; border-radius: 4px; letter-spacing: 1px; }
+.live.live { color: #9be38d; border-color: #5fbf4f; background: #1f3a22; }
+.live.connecting, .live.demo { color: #f5d77a; border-color: #b8952f; background: #3a321a; }
+.live.offline { color: #ffb0a4; border-color: #c4554a; background: #3a1d1a; animation: blink 1.2s steps(2) infinite; }
+@keyframes blink { 50% { opacity: .55; } }
+.pnl i { font-style: normal; font-size: .75em; margin-right: 3px; }
+.pnl.gain i { color: var(--up-d); } .pnl.loss i { color: var(--dn-d); }
+.sheet .pnl.gain i { color: var(--up); } .sheet .pnl.loss i { color: var(--dn); }
+.muted { color: var(--muted); }
+
+/* ---------------- layout */
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 10px; padding: 10px; height: calc(100dvh - 54px); }
+.game { min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.canvas-wrap { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: #0b120d; border: 3px solid var(--wood); border-radius: 6px; box-shadow: inset 0 0 0 2px #7a5230; overflow: hidden; }
+.stage { position: relative; line-height: 0; }
+canvas#world { display: block; image-rendering: pixelated; image-rendering: crisp-edges; touch-action: manipulation; }
+.belowmap { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.clockbar { display: flex; gap: 6px; align-items: center; background: #0f1912; border: 2px solid #33503c; border-radius: 4px; padding: 2px 8px; min-height: 34px; }
+.clockbar b { font-weight: 400; color: #fff6e0; font-size: 20px; } .clockbar span { color: #ffe08a; } .clockbar span::before, .clockbar em::before { content: '·'; color: var(--muted); margin-right: 6px; }
+.clockbar em { font-style: normal; color: #d9e2c8; } .clockbar em.gain { color: #bfe0ff; } .clockbar em.loss { color: #ffc4bb; }
+.tip { position: absolute; z-index: 5; pointer-events: none; background: #2a1a10ee; border: 2px solid #c48a46; color: #fff4dc; padding: 4px 8px; border-radius: 4px; max-width: 240px; line-height: 1.1; }
+.tip b { display: block; font-weight: 400; color: var(--gold); } .tip span { font-size: 17px; }
+.toasts { position: absolute; right: 8px; bottom: 8px; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; line-height: 1.1; pointer-events: none; }
+.toast { background: var(--parch); color: var(--ink-2); border: 3px solid var(--wood); border-radius: 5px; padding: 5px 10px; max-width: 300px; box-shadow: 0 4px 0 #0005; animation: pop .25s ease-out; transition: opacity .6s, transform .6s; }
+.toast b { display: block; font-family: 'Pixelify Sans', monospace; font-size: 16px; color: #7a3a10; } .toast span { font-size: 17px; }
+.toast.out { opacity: 0; transform: translateY(6px); }
+@keyframes pop { from { transform: scale(.9); opacity: 0; } }
+.places { display: flex; flex-wrap: wrap; gap: 6px; }
+.belowmap .places { flex: 1; }
+.places button { background: #3a2716; border: 2px solid #1a0f07; box-shadow: inset 0 0 0 2px #6b4724; color: #ffe9c2; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 18px; }
+.places button:hover, .places button:focus-visible { background: #4e331c; outline: none; box-shadow: inset 0 0 0 2px #c48a46; }
+
+/* ---------------- sidebar */
+.side { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.panel { background: var(--panel); border: 2px solid var(--edge); box-shadow: inset 0 0 0 2px var(--panel-hi); border-radius: 6px; padding: 10px 12px; }
+.panel.grow { flex: 1; min-height: 160px; display: flex; flex-direction: column; }
+.panel h2 { margin: 0 0 8px; font-size: 20px; color: var(--gold); display: flex; gap: 8px; align-items: center; }
+.kv { display: flex; justify-content: space-between; } .kv > span { color: var(--muted); } .kv b { font-weight: 400; font-variant-numeric: tabular-nums; }
+.bot { border: 2px solid #3d5a45; border-radius: 4px; padding: 6px 8px; margin-bottom: 8px; background: #1e3125; }
+.bot-h { display: flex; align-items: center; gap: 6px; } .bot-h b { color: #ffd8a0; font-weight: 400; font-size: 21px; }
+.r { margin-left: auto; text-align: right; font-variant-numeric: tabular-nums; }
+.bot-sub { color: var(--muted); font-size: 17px; margin: 2px 0 4px; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.badge { font-family: 'Pixelify Sans', monospace; font-size: 12px; padding: 1px 5px; border-radius: 3px; letter-spacing: .5px; }
+.badge.halt { background: #c9342b; color: #fff; } .badge.stale { background: #d9a03a; color: #2a1a10; }
+.vil { display: grid; grid-template-columns: 40px 1fr auto; grid-template-rows: auto auto; column-gap: 6px; width: 100%; text-align: left; background: transparent; border: 0; border-top: 1px dashed #3d5a45; padding: 4px 0; cursor: pointer; font-size: 18px; line-height: 1.05; }
+.vil:hover .act, .vil:focus-visible .act { color: #fff; } .vil:focus-visible { outline: 2px solid var(--gold); }
+.vil .sym { grid-row: span 2; color: var(--gold); font-size: 19px; } .vil .act { color: #d9e2c8; } .vil .mood { color: var(--muted); font-size: 16px; grid-column: 2; } .vil .r { grid-row: 1; grid-column: 3; }
+.ledger { overflow: auto; min-height: 0; flex: 1; }
+.led { background: #3a2716; border: 2px solid #1a0f07; box-shadow: inset 0 0 0 1px #6b4724; border-radius: 4px; padding: 6px 8px; margin-bottom: 6px; }
+.led-h { color: #c9b28a; font-size: 16px; } .led-b { color: #fff3dc; } .led-a { color: #ffd98a; font-size: 18px; }
+
+/* ---------------- modal (parchment) */
+.modal { position: fixed; inset: 0; background: rgba(6, 10, 7, .62); display: flex; align-items: center; justify-content: center; z-index: 20; padding: 16px; }
+.modal[hidden] { display: none; }
+.sheet { background: var(--parch); color: var(--ink-2); width: min(780px, 100%); max-height: min(88dvh, 860px); display: flex; flex-direction: column; border: 4px solid var(--wood); box-shadow: inset 0 0 0 3px var(--wood-l), 0 14px 40px #000a; border-radius: 8px; }
+.sheet-h { display: flex; align-items: center; padding: 10px 14px 4px; }
+.sheet-h h2 { margin: 0; font-size: 26px; color: #6b3410; }
+.x { margin-left: auto; background: #c9342b; color: #fff; border: 2px solid #5a1a14; border-radius: 4px; width: 34px; height: 32px; cursor: pointer; font-size: 18px; }
+.x:focus-visible { outline: 3px solid var(--wood-l); }
+.tabs { display: flex; gap: 4px; padding: 4px 14px 0; border-bottom: 3px solid var(--wood-l); }
+.tabs[hidden] { display: none; }
+.tabs button { background: #e9cf9f; border: 2px solid var(--wood); border-bottom: 0; border-radius: 6px 6px 0 0; padding: 4px 14px; cursor: pointer; color: #5a3416; font-size: 19px; }
+.tabs button.on { background: var(--parch-2); color: #2a1608; position: relative; top: 3px; padding-bottom: 7px; }
+.sheet-b { overflow: auto; padding: 12px 16px 16px; }
+.sheet h3 { font-size: 18px; color: #6b3410; margin: 14px 0 6px; } .sheet h4 { font-size: 16px; margin: 10px 0 4px; color: #6b3410; }
+.sheet .muted { color: var(--muted-2); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 8px; }
+.tile { background: var(--parch-2); border: 2px solid var(--parch-edge); border-radius: 5px; padding: 6px 9px; display: flex; flex-direction: column; }
+.tile > span { color: var(--muted-2); font-size: 17px; } .tile > b { font-weight: 400; font-size: 26px; font-variant-numeric: tabular-nums; } .tile > em { font-style: normal; color: var(--muted-2); font-size: 16px; }
+.tbl { overflow: auto; border: 2px solid var(--parch-edge); border-radius: 5px; background: var(--parch-2); }
+.tbl table { border-collapse: collapse; width: 100%; font-size: 18px; }
+.tbl th { text-align: left; font-weight: 400; color: var(--muted-2); border-bottom: 2px solid var(--parch-edge); padding: 4px 8px; position: sticky; top: 0; background: var(--parch-2); }
+.tbl td { padding: 3px 8px; border-bottom: 1px solid #ecd9b4; white-space: nowrap; }
+.tbl .n { text-align: right; font-variant-numeric: tabular-nums; }
+.tbl tr.hl td { background: #fde9b8; }
+.tbl table.dec td { white-space: normal; } .tbl tr.sub td { color: var(--muted-2); font-size: 16px; padding-top: 0; }
+.note { color: var(--muted-2); font-size: 17px; border-left: 3px solid var(--parch-edge); padding-left: 8px; }
+code { background: #2a1a10; color: #ffe9c2; padding: 0 5px; border-radius: 3px; }
+.botcard + .botcard { border-top: 3px dashed var(--parch-edge); margin-top: 14px; padding-top: 4px; }
+.botcard h3 { display: flex; gap: 8px; align-items: center; }
+.resident { margin: 8px 0; }
+ul.pos { margin: 0; padding-left: 18px; } ul.pos li.hl { background: #fde9b8; }
+
+/* chart: diverging columns, 24px max, 4px rounded data-end, 2px gaps */
+.chart { position: relative; margin: 6px 0 10px; }
+.plot { position: relative; display: flex; gap: 2px; padding: 0 4px; }
+.zero { position: absolute; left: 0; right: 0; height: 1px; background: #b99b6a; }
+.col { position: relative; flex: 1; outline: none; cursor: default; }
+.col:hover { background: #0000000a; } .col:focus-visible { outline: 2px dashed var(--muted-2); }
+.bar { position: absolute; left: 50%; transform: translateX(-50%); width: min(24px, 70%); }
+.bar.up { background: var(--up); border-radius: 4px 4px 0 0; } .bar.dn { background: var(--dn); border-radius: 0 0 4px 4px; }
+.vl { position: absolute; left: 50%; transform: translateX(-50%); font-size: 17px; color: var(--ink-2); white-space: nowrap; }
+.xl { position: absolute; left: 50%; transform: translateX(-50%); bottom: -22px; font-size: 16px; color: var(--muted-2); white-space: nowrap; }
+.chart-tip { position: fixed; z-index: 50; transform: translateY(-100%); background: #2a1a10; color: #fff4dc; border: 2px solid #c48a46; border-radius: 4px; padding: 4px 8px; width: 180px; pointer-events: none; font-size: 17px; line-height: 1.1; }
+.chart-tip[hidden] { display: none; }
+.chart-tip b { font-weight: 400; color: var(--gold); }
+.proj { display: grid; gap: 8px; margin: 14px 0; }
+.proj-row { display: grid; grid-template-columns: 110px 1fr 110px; gap: 8px; align-items: center; }
+.proj-row > b { font-weight: 400; text-align: right; font-variant-numeric: tabular-nums; }
+.track { height: 14px; background: #ecd9b4; border-radius: 3px; overflow: hidden; }
+.fill { height: 100%; } .fill.up { background: var(--up); } .fill.dn { background: var(--dn); }
+.fill.ghost { background: repeating-linear-gradient(45deg, currentColor 0 4px, transparent 4px 8px); }
+.fill.up.ghost { color: var(--up); } .fill.dn.ghost { color: var(--dn); }
+
+/* ---------------- small screens */
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; height: auto; padding: 8px; }
+  .canvas-wrap { flex: none; padding: 0; }
+  .side { overflow: visible; }
+  .stats { gap: 12px; margin-left: 0; width: 100%; justify-content: space-between; }
+  .stat { flex-direction: column; gap: 0; } .stat > b { font-size: 21px; }
+  .top { gap: 8px; } .top h1 { font-size: 21px; } .live { margin-left: auto; }
+  .brand { flex: 1; }
+  .clockbar { width: 100%; } .clockbar em { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toast { max-width: 220px; font-size: 15px; }
+}
+@media (max-width: 600px) {
+  .modal { padding: 0; }
+  .sheet { width: 100%; height: 100dvh; max-height: none; border-radius: 0; }
+  .tabs button { padding: 4px 9px; font-size: 17px; }
+  .proj-row { grid-template-columns: 80px 1fr 90px; }
+}
+@media (prefers-reduced-motion: reduce) { .live.offline { animation: none; } .toast { animation: none; } }
+
+</style>
+<style>
+#inbox-panel { border: 2px solid #d8a723; }
+#inbox .inbox-empty { color: #a9b79a; padding: 6px 2px; }
+.inbox-card { background: #f6e7c8; color: #3b2414; border: 3px solid #5b3a1e; border-radius: 6px; padding: 10px; margin: 8px 0; }
+.inbox-q { font-weight: 700; font-size: 22px; margin-bottom: 4px; }
+.inbox-why { font-size: 18px; color: #7a5a3a; margin-bottom: 8px; }
+.inbox-btn { display: block; width: 100%; margin: 6px 0; padding: 10px; font-family: inherit; font-size: 20px; font-weight: 700;
+  background: #5da83a; color: #10240a; border: 3px solid #2c5a1a; border-radius: 6px; cursor: pointer; }
+.inbox-btn:hover { background: #71c24a; }
+.inbox-default { font-size: 16px; color: #7a5a3a; margin-top: 6px; }
+.inbox-note { font-size: 15px; color: #a9b79a; margin-top: 6px; }
 </style>
 </head>
 <body>
-<div id="paperbanner" style="background:#3a2c07;border-bottom:4px solid #d8a723;color:#ffe9a8;text-align:center;padding:8px 12px;font-size:11px;letter-spacing:1px;">&#x1F4DD; PAPER TRADING SIMULATION &mdash; no real money is traded. Educational project.</div>
-<div id="topbar">
-  <h1>🌾 Trade Farm</h1>
+<div id="paperbanner" style="background:#3a2c07;border-bottom:4px solid #d8a723;color:#ffe9a8;text-align:center;padding:8px 12px;font-size:15px;letter-spacing:1px;font-family:'VT323',monospace;">&#x1F4DD; Russell La&apos;s personal paper trades &mdash; simulated trading, no real money.</div>
+<header class="top">
+  <div class="brand"><span class="logo" aria-hidden="true"></span><h1>Scalp City Farm</h1></div>
   <div class="stats">
-    <div><span class="stat-label">Treasury:</span> <span id="t-total">—</span></div>
-    <div><span class="stat-label">Reserve:</span> <span id="t-reserve">—</span></div>
-    <div><span class="stat-label">Day P&amp;L:</span> <span id="t-daypnl">—</span></div>
-    <div><span class="stat-label">ET:</span> <span id="t-clock">—</span></div>
-    <div id="conn" class="dead">OFFLINE</div>
+    <div class="stat"><span>Treasury</span><b id="st-total">—</b></div>
+    <div class="stat"><span>Reserve</span><b id="st-reserve">—</b></div>
+    <div class="stat"><span>Day P&amp;L</span><b id="st-day">—</b></div>
+  </div>
+  <div id="live" class="live connecting" role="status" aria-live="polite">CONNECTING</div>
+</header>
+<main class="layout">
+  <section class="game" aria-label="Village map">
+    <div class="canvas-wrap" id="canvas-wrap">
+      <div class="stage">
+        <canvas id="world" aria-label="Pixel-art village showing each bot's villagers trading. Use the buttons below the map to open details."></canvas>
+        <div class="toasts" id="toasts" aria-live="polite"></div>
+      </div>
+      <div class="tip" id="tip" hidden></div>
+    </div>
+    <div class="belowmap"><div class="clockbar" id="clock" aria-live="off"></div><nav class="places" id="places" aria-label="Places"></nav></div>
+  </section>
+  <aside class="side">
+    <section class="panel" id="inbox-panel">
+      <h2><span aria-hidden="true">&#x1F514;</span>Decisions for You</h2>
+      <div id="inbox"></div>
+      <div class="inbox-note">Decide in chat &mdash; tap an option there and the Mayor updates within ~15 min.</div>
+    </section>
+    <section class="panel">
+      <h2><span aria-hidden="true">🏦</span>Treasury</h2>
+      <div class="kv"><span>Silo (reserve)</span><b id="tr-reserve">—</b></div>
+      <div class="kv"><span>Available</span><b id="tr-avail">—</b></div>
+      <div class="kv"><span>Withdrawn</span><b id="tr-withdrawn">—</b></div>
+      <div class="kv"><span>Bots</span><b id="tr-bots">0</b></div>
+    </section>
+    <section class="panel">
+      <h2><span aria-hidden="true">🧑‍🌾</span>Villagers</h2>
+      <div id="villagers"></div>
+    </section>
+    <section class="panel grow">
+      <h2><span aria-hidden="true">📜</span>Mayor's Ledger</h2>
+      <div id="ledger" class="ledger"></div>
+    </section>
+  </aside>
+</main>
+<div class="modal" id="modal" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="sheet-h"><h2 id="modal-title"></h2><button id="modal-close" class="x" aria-label="Close">✕</button></div>
+    <div class="tabs" id="tabs" role="tablist"></div>
+    <div class="sheet-b" id="modal-body"></div>
   </div>
 </div>
-<div id="feedbanner"></div>
-<div id="redbanner"></div>
-<div id="main">
-  <div id="farm-wrap">
-    <canvas id="farm" width="960" height="640"></canvas>
-    <div id="toast"></div>
-    <div id="nodata">📡 No farm data yet.<br><span class="small">state.json not found next to this page.<br>The farm hasn't reported in.</span></div>
-  </div>
-  <div id="side">
-    <div class="panel" id="feedpanel">
-      <h2>📻 Feed Health</h2>
-      <div class="trow"><span>Source:</span><span id="f-source">—</span></div>
-      <div class="trow"><span>Data age:</span><span id="f-age">—</span></div>
-      <div class="trow"><span>Data lag:</span><span id="f-lag">—</span></div>
-      <div class="trow"><span>Session:</span><span id="f-session">—</span></div>
-      <div class="trow"><span>Flatten (ET):</span><span id="f-flatten">—</span></div>
-      <div id="f-badges" style="margin-top:6px"></div>
-    </div>
-    <div class="panel" id="treasurypanel">
-      <h2>🏦 Treasury</h2>
-      <div class="trow"><span>Silo (reserve):</span><span id="tr-reserve">—</span></div>
-      <div class="trow"><span>Withdrawn:</span><span id="tr-withdrawn">—</span></div>
-      <div class="trow"><span>Farmers:</span><span id="tr-bots">—</span></div>
-    </div>
-    <div class="panel" id="limitspanel">
-      <h2>⚖️ Treasurer Limits</h2>
-      <div class="trow"><span>Profit target +$500</span><span id="l-profit">—</span></div>
-      <div class="bar"><div id="l-profit-bar" style="width:0%;background:#7dd87d"></div></div>
-      <div class="trow"><span>Daily stop −$1,000</span><span id="l-loss">—</span></div>
-      <div class="bar"><div id="l-loss-bar" style="width:0%;background:#d87d7d"></div></div>
-      <div class="trow"><span>Swept today:</span><span id="l-swept">—</span></div>
-    </div>
-    <div class="panel" id="redpanel">
-      <h2>🚨 Red Switch</h2>
-      <div class="trow"><span>State:</span><span id="r-state">—</span></div>
-      <div class="trow"><span>Reason:</span><span id="r-reason">—</span></div>
-      <div class="small" style="margin-top:6px;line-height:1.7">Trips on: daily stop · dead feed · rogue farmer · any real-money action. Nothing resumes without a human.</div>
-    </div>
-    <div class="panel" id="bots"><h2>🧑‍🌾 Farmers</h2><div id="bot-list"><div class="small">waiting for data…</div></div></div>
-    <div class="panel" id="ledger"><h2>📜 Mayor's Ledger</h2><div id="decision-list"><div class="small">no decisions yet</div></div></div>
-  </div>
-</div>
+<div class="chart-tip" id="chart-tip" hidden></div>
 <script>
-// ===== State =====
-const S = { bots: {}, treasury: null, feed: null, limits: null, red: null,
-            session: 'closed', connected: false, lastOk: null, staleView: false };
-const BOT_COLORS = ['#e74c3c','#3498db','#2ecc71','#f39c12','#9b59b6','#1abc9c'];
-let colorIdx = 0;
-const POLL_MS = 30000, OFFLINE_AFTER_MIN = 10;
+'use strict';
+/* ============================================================== util */
+const TILE = 16;
+const WORLD_W = 48 * TILE;   // 768
+const WORLD_H = 32 * TILE;   // 512
+const ET_TZ = 'America/New_York';
+const QS = new URLSearchParams(location.search);
+const DEMO = QS.has('demo') || !/^https?:$/.test(location.protocol);   // opened as a file/preview -> simulated trades
+const SESSION_OVERRIDE = QS.get('session');   // ?session=closed to preview night
 
-// ===== Polling (replaces WebSocket in v1) =====
-async function pollState() {
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function hashStr(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const dist = (ax, ay, bx, by) => Math.hypot(bx - ax, by - ay);
+const pick = (rnd, arr) => arr[Math.floor(rnd() * arr.length)];
+
+const _etDay = new Intl.DateTimeFormat('en-CA', { timeZone: ET_TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
+const _etHM = new Intl.DateTimeFormat('en-US', { timeZone: ET_TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+function etDay(d = new Date()) { return _etDay.format(d); }                       // "2026-10-06"
+function etMinutes(d = new Date()) { const [h, m] = _etHM.format(d).split(':').map(Number); return h * 60 + m; }
+function parseTs(ts) { if (!ts) return null; const d = new Date(ts); return isNaN(d) ? null : d; }
+function dayOfTs(ts) { const d = parseTs(ts); return d ? etDay(d) : null; }
+function weekdayOf(day) { return new Date(day + 'T12:00:00Z').getUTCDay(); }      // 0 = Sunday
+function addDays(day, n) { const d = new Date(day + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+function isWeekday(day) { const w = weekdayOf(day); return w > 0 && w < 6; }
+function mondayOf(day) { const w = weekdayOf(day); return addDays(day, w === 0 ? -6 : 1 - w); }
+function shortDate(day) { const d = new Date(day + 'T12:00:00Z'); return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' }); }
+function weekdayName(day) { return new Date(day + 'T12:00:00Z').toLocaleDateString(undefined, { weekday: 'short', timeZone: 'UTC' }); }
+
+const _localTime = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+const _localDT = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+function fmtTime(ts) { const d = parseTs(ts); return d ? _localTime.format(d) : ''; }
+function fmtWhen(ts) { const d = parseTs(ts); if (!d) return ''; return etDay(d) === etDay() ? _localTime.format(d) : _localDT.format(d); }
+
+function money(v, plus = false, cents = true) {
+  if (v == null || isNaN(v)) return '—';
+  const n = Number(v), a = Math.abs(n);
+  const sign = n < 0 ? '−' : (plus && n > 0 ? '+' : '');
+  return sign + '$' + a.toLocaleString('en-US', { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: cents ? 2 : 0 });
+}
+function moneyShort(v, plus = true) {
+  if (v == null || isNaN(v)) return '—';
+  const n = Number(v), a = Math.abs(n);
+  const sign = n < 0 ? '-' : (plus && n > 0 ? '+' : '');
+  const body = a >= 1e6 ? (a / 1e6).toFixed(1) + 'M' : a >= 1e4 ? (a / 1e3).toFixed(1) + 'K' : a >= 1000 ? Math.round(a).toLocaleString('en-US') : a.toFixed(a < 100 ? 2 : 0);
+  return sign + '$' + body;
+}
+/* compact, comma-free money for the pixel fonts: $542, $1.2K, -$3.4K */
+function moneyTiny(v, plus = true) {
+  if (v == null || isNaN(v)) return '$0';
+  const n = Number(v), a = Math.abs(n), sign = n < 0 ? '-' : (plus && n > 0 ? '+' : '');
+  const body = a >= 1e6 ? (a / 1e6).toFixed(1) + 'M' : a >= 1000 ? (a / 1e3).toFixed(a >= 1e5 ? 0 : 1) + 'K' : String(Math.round(a));
+  return sign + '$' + body;
+}
+function pnlClass(v) { return v > 0 ? 'gain' : v < 0 ? 'loss' : 'flat'; }
+function pnlHtml(v, cents = true) {
+  if (v == null || isNaN(v)) return '<span class="flat">—</span>';
+  const arrow = v > 0 ? '▲' : v < 0 ? '▼' : '';
+  return `<span class="pnl ${pnlClass(v)}"><i>${arrow}</i>${money(v, true, cents)}</span>`;
+}
+function pct(a, b) { return b ? Math.round(100 * a / b) + '%' : '—'; }
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } },
+};
+const STORE_PREFIX = DEMO ? 'tradefarm.demo.' : 'tradefarm.';
+
+/* ============================================================== bitmap fonts (no assets) */
+const F5 = { w: 5, h: 7, g: {
+  'A': ['.###.', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
+  'B': ['####.', '#...#', '#...#', '####.', '#...#', '#...#', '####.'],
+  'C': ['.###.', '#...#', '#....', '#....', '#....', '#...#', '.###.'],
+  'D': ['####.', '#...#', '#...#', '#...#', '#...#', '#...#', '####.'],
+  'E': ['#####', '#....', '#....', '####.', '#....', '#....', '#####'],
+  'F': ['#####', '#....', '#....', '####.', '#....', '#....', '#....'],
+  'G': ['.###.', '#...#', '#....', '#.###', '#...#', '#...#', '.####'],
+  'H': ['#...#', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
+  'I': ['.###.', '..#..', '..#..', '..#..', '..#..', '..#..', '.###.'],
+  'J': ['..###', '...#.', '...#.', '...#.', '#..#.', '#..#.', '.##..'],
+  'K': ['#...#', '#..#.', '#.#..', '##...', '#.#..', '#..#.', '#...#'],
+  'L': ['#....', '#....', '#....', '#....', '#....', '#....', '#####'],
+  'M': ['#...#', '##.##', '#.#.#', '#.#.#', '#...#', '#...#', '#...#'],
+  'N': ['#...#', '#...#', '##..#', '#.#.#', '#..##', '#...#', '#...#'],
+  'O': ['.###.', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+  'P': ['####.', '#...#', '#...#', '####.', '#....', '#....', '#....'],
+  'Q': ['.###.', '#...#', '#...#', '#...#', '#.#.#', '#..#.', '.##.#'],
+  'R': ['####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'],
+  'S': ['.####', '#....', '#....', '.###.', '....#', '....#', '####.'],
+  'T': ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
+  'U': ['#...#', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+  'V': ['#...#', '#...#', '#...#', '#...#', '#...#', '.#.#.', '..#..'],
+  'W': ['#...#', '#...#', '#...#', '#.#.#', '#.#.#', '#.#.#', '.#.#.'],
+  'X': ['#...#', '#...#', '.#.#.', '..#..', '.#.#.', '#...#', '#...#'],
+  'Y': ['#...#', '#...#', '.#.#.', '..#..', '..#..', '..#..', '..#..'],
+  'Z': ['#####', '....#', '...#.', '..#..', '.#...', '#....', '#####'],
+  '0': ['.###.', '#...#', '#..##', '#.#.#', '##..#', '#...#', '.###.'],
+  '1': ['..#..', '.##..', '..#..', '..#..', '..#..', '..#..', '.###.'],
+  '2': ['.###.', '#...#', '....#', '...#.', '..#..', '.#...', '#####'],
+  '3': ['#####', '...#.', '..#..', '...#.', '....#', '#...#', '.###.'],
+  '4': ['...#.', '..##.', '.#.#.', '#..#.', '#####', '...#.', '...#.'],
+  '5': ['#####', '#....', '####.', '....#', '....#', '#...#', '.###.'],
+  '6': ['..##.', '.#...', '#....', '####.', '#...#', '#...#', '.###.'],
+  '7': ['#####', '....#', '...#.', '..#..', '.#...', '.#...', '.#...'],
+  '8': ['.###.', '#...#', '#...#', '.###.', '#...#', '#...#', '.###.'],
+  '9': ['.###.', '#...#', '#...#', '.####', '....#', '...#.', '.##..'],
+  ' ': ['.....', '.....', '.....', '.....', '.....', '.....', '.....'],
+  '.': ['.....', '.....', '.....', '.....', '.....', '.##..', '.##..'],
+  ',': ['.....', '.....', '.....', '.....', '.##..', '..#..', '.#...'],
+  "'": ['..#..', '..#..', '.#...', '.....', '.....', '.....', '.....'],
+  ':': ['.....', '.##..', '.##..', '.....', '.##..', '.##..', '.....'],
+  '$': ['..#..', '.####', '#.#..', '.###.', '..#.#', '####.', '..#..'],
+  '+': ['.....', '..#..', '..#..', '#####', '..#..', '..#..', '.....'],
+  '-': ['.....', '.....', '.....', '#####', '.....', '.....', '.....'],
+  '%': ['##..#', '##..#', '...#.', '..#..', '.#...', '#..##', '#..##'],
+  '!': ['..#..', '..#..', '..#..', '..#..', '..#..', '.....', '..#..'],
+  '?': ['.###.', '#...#', '....#', '...#.', '..#..', '.....', '..#..'],
+  '/': ['....#', '....#', '...#.', '..#..', '.#...', '#....', '#....'],
+  '&': ['.##..', '#..#.', '#.#..', '.#...', '#.#.#', '#..#.', '.##.#'],
+  '>': ['.#...', '..#..', '...#.', '....#', '...#.', '..#..', '.#...'],
+  '<': ['...#.', '..#..', '.#...', '#....', '.#...', '..#..', '...#.'],
+  '#': ['.#.#.', '.#.#.', '#####', '.#.#.', '#####', '.#.#.', '.#.#.'],
+  '(': ['...#.', '..#..', '.#...', '.#...', '.#...', '..#..', '...#.'],
+  ')': ['.#...', '..#..', '...#.', '...#.', '...#.', '..#..', '.#...'],
+  '=': ['.....', '.....', '#####', '.....', '#####', '.....', '.....'],
+  '_': ['.....', '.....', '.....', '.....', '.....', '.....', '#####'],
+} };
+const F3 = { w: 3, h: 5, g: {
+  'A': ['.#.', '#.#', '###', '#.#', '#.#'], 'B': ['##.', '#.#', '##.', '#.#', '##.'],
+  'C': ['.##', '#..', '#..', '#..', '.##'], 'D': ['##.', '#.#', '#.#', '#.#', '##.'],
+  'E': ['###', '#..', '##.', '#..', '###'], 'F': ['###', '#..', '##.', '#..', '#..'],
+  'G': ['.##', '#..', '#.#', '#.#', '.##'], 'H': ['#.#', '#.#', '###', '#.#', '#.#'],
+  'I': ['###', '.#.', '.#.', '.#.', '###'], 'J': ['..#', '..#', '..#', '#.#', '.#.'],
+  'K': ['#.#', '#.#', '##.', '#.#', '#.#'], 'L': ['#..', '#..', '#..', '#..', '###'],
+  'M': ['#.#', '###', '###', '#.#', '#.#'], 'N': ['##.', '#.#', '#.#', '#.#', '#.#'],
+  'O': ['.#.', '#.#', '#.#', '#.#', '.#.'], 'P': ['##.', '#.#', '##.', '#..', '#..'],
+  'Q': ['.#.', '#.#', '#.#', '##.', '.##'], 'R': ['##.', '#.#', '##.', '#.#', '#.#'],
+  'S': ['.##', '#..', '.#.', '..#', '##.'], 'T': ['###', '.#.', '.#.', '.#.', '.#.'],
+  'U': ['#.#', '#.#', '#.#', '#.#', '###'], 'V': ['#.#', '#.#', '#.#', '#.#', '.#.'],
+  'W': ['#.#', '#.#', '###', '###', '#.#'], 'X': ['#.#', '#.#', '.#.', '#.#', '#.#'],
+  'Y': ['#.#', '#.#', '.#.', '.#.', '.#.'], 'Z': ['###', '..#', '.#.', '#..', '###'],
+  '0': ['###', '#.#', '#.#', '#.#', '###'], '1': ['.#.', '##.', '.#.', '.#.', '###'],
+  '2': ['##.', '..#', '.#.', '#..', '###'], '3': ['##.', '..#', '.#.', '..#', '##.'],
+  '4': ['#.#', '#.#', '###', '..#', '..#'], '5': ['###', '#..', '##.', '..#', '##.'],
+  '6': ['.##', '#..', '###', '#.#', '###'], '7': ['###', '..#', '.#.', '.#.', '.#.'],
+  '8': ['###', '#.#', '###', '#.#', '###'], '9': ['###', '#.#', '###', '..#', '##.'],
+  ' ': ['...', '...', '...', '...', '...'], '.': ['...', '...', '...', '...', '.#.'],
+  '-': ['...', '...', '###', '...', '...'], '+': ['...', '.#.', '###', '.#.', '...'],
+  '!': ['.#.', '.#.', '.#.', '...', '.#.'], '?': ['##.', '..#', '.#.', '...', '.#.'],
+  '$': ['.##', '##.', '.#.', '.##', '##.'], ':': ['...', '.#.', '...', '.#.', '...'],
+  '/': ['..#', '..#', '.#.', '#..', '#..'], "'": ['.#.', '.#.', '...', '...', '...'], ',': ['...', '...', '...', '.#.', '#..'],
+} };
+
+function textWidth(str, font = F5) { return str.length ? str.length * (font.w + 1) - 1 : 0; }
+function drawText(ctx, str, x, y, color, font = F5) {
+  ctx.fillStyle = color;
+  str = String(str).toUpperCase().replace(/[−–—]/g, '-').replace(/×/g, 'X').replace(/·/g, '.');
+  let cx = Math.round(x); y = Math.round(y);
+  for (const ch of str) {
+    const g = font.g[ch] || font.g['?'];
+    for (let r = 0; r < font.h; r++) {
+      const row = g[r];
+      let run = -1;
+      for (let c = 0; c <= font.w; c++) {
+        const on = c < font.w && row[c] === '#';
+        if (on && run < 0) run = c;
+        if (!on && run >= 0) { ctx.fillRect(cx + run, y + r, c - run, 1); run = -1; }
+      }
+    }
+    cx += font.w + 1;
+  }
+}
+/* text with a 1px dark outline - readable on any background */
+function drawTextOutlined(ctx, str, x, y, color, outline, font = F5) {
+  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]]) drawText(ctx, str, x + dx, y + dy, outline, font);
+  drawText(ctx, str, x, y, color, font);
+}
+
+/* ============================================================== pixel art primitives + props */
+const P = {
+  grass: '#5da83a', grassL: '#6db845', grassD: '#4f9733', grassDD: '#3d7f28', grassTip: '#8fd35a',
+  dirt: '#e4bf88', dirtL: '#f0d3a3', dirtD: '#cfa36a', dirtDD: '#a97b45', mortar: '#c09060',
+  soil: '#8a5a33', soilD: '#6b4226', soilL: '#a46d42',
+  water: '#4c9be2', waterD: '#3f88d2', waterDD: '#3373bb', waterL: '#7cc0f2', foam: '#dff3ff',
+  shore: '#b8a47c', shoreD: '#7d6b4b', stone: '#a7abb0', stoneD: '#81868c', stoneDD: '#5f6369', stoneL: '#c9cdd1',
+  wood: '#b97a45', woodL: '#d39a5f', woodD: '#8a5530', woodDD: '#5e3a1f', outline: '#2d1b10',
+  leaf: '#3e9038', leafL: '#5cb246', leafD: '#2d722d', leafDD: '#1f5626', leafHL: '#8ad45f',
+  pine: '#2f6e40', pineL: '#469052', pineD: '#225232',
+  fall: '#e2a72a', fallL: '#f5cf4e', fallD: '#bb781c', fallDD: '#8f5512',
+  trunk: '#7a4b2a', trunkD: '#57331b',
+  hedge: '#3f9d3b', hedgeL: '#66c654', hedgeD: '#2a7530', hedgeDD: '#1f5a25',
+  glass: '#86c9ee', glassD: '#4d93c7', glassHL: '#e2f5ff', frame: '#f1e6cf', frameD: '#c7b897',
+  lit: '#ffd866', litL: '#fff4b8', litD: '#eaa43a',
+  gold: '#ffd23f', goldL: '#fff1a6', goldD: '#e09a1c', goldDD: '#9c5c0c',
+  white: '#f7f3ea', ink: '#3b2414', red: '#c94a3f', board: '#dcaa6c', boardL: '#efc690', boardD: '#b8844a',
+};
+const ROOFS = {
+  red:   { base: '#b9453c', dark: '#8f3129', light: '#d4685b', ridge: '#6a221c' },
+  teal:  { base: '#2f8b8f', dark: '#226a6e', light: '#52b2b1', ridge: '#174a4e' },
+  slate: { base: '#4c5b75', dark: '#37435b', light: '#67799c', ridge: '#262f42' },
+  green: { base: '#4f8b3a', dark: '#3a6b2a', light: '#70ad52', ridge: '#28491d' },
+  plum:  { base: '#7b4b8b', dark: '#5c356c', light: '#9d6cad', ridge: '#40244d' },
+  brown: { base: '#8b5b3b', dark: '#6b422a', light: '#a97553', ridge: '#4b2c1a' },
+  navy:  { base: '#3d4f8f', dark: '#2c3a6e', light: '#5a6fb0', ridge: '#1d274b' },
+};
+const WALLS = {
+  plank:   { base: '#c48a56', dark: '#a06a3d', light: '#dba46d', post: '#6e4325' },
+  redwood: { base: '#b34b3f', dark: '#8c362d', light: '#cc675b', post: '#5a2a22' },
+  cream:   { base: '#eadcbf', dark: '#cdbb98', light: '#f7efdc', post: '#8a6a45' },
+  stone:   { base: '#bdb7ab', dark: '#979086', light: '#d6d2ca', post: '#6d675f' },
+  blue:    { base: '#7a98c0', dark: '#5e7ba3', light: '#98b3d6', post: '#3c4f6e' },
+  sage:    { base: '#9db68a', dark: '#7f9a6d', light: '#b8cda7', post: '#4e6340' },
+};
+
+function R(ctx, x, y, w, h, c) { if (w <= 0 || h <= 0) return; ctx.fillStyle = c; ctx.fillRect(x, y, w, h); }
+function px(ctx, x, y, c) { ctx.fillStyle = c; ctx.fillRect(x, y, 1, 1); }
+function disc(ctx, cx, cy, r, c) {
+  ctx.fillStyle = c;
+  for (let dy = -r; dy <= r; dy++) {
+    const w = Math.floor(Math.sqrt((r + 0.5) ** 2 - dy * dy));
+    ctx.fillRect(cx - w, cy + dy, 2 * w + 1, 1);
+  }
+}
+function ellipse(ctx, cx, cy, rx, ry, c) {
+  ctx.fillStyle = c;
+  for (let dy = -ry; dy <= ry; dy++) {
+    const w = Math.floor(rx * Math.sqrt(Math.max(0, 1 - (dy / (ry + 0.5)) ** 2)));
+    ctx.fillRect(Math.round(cx - w), Math.round(cy + dy), 2 * w + 1, 1);
+  }
+}
+function shadowEllipse(ctx, cx, cy, rx, ry, a = 0.22) { ellipse(ctx, cx, cy, rx, ry, `rgba(20,40,10,${a})`); }
+
+/* ---------------------------------------------------------- ground */
+function grassTuft(ctx, x, y, rnd) {
+  const c = rnd() < 0.5 ? P.grassDD : P.grassD;
+  R(ctx, x, y + 1, 1, 3, c); R(ctx, x + 2, y, 1, 4, c); R(ctx, x + 4, y + 1, 1, 3, c);
+  px(ctx, x + 2, y, P.grassTip); px(ctx, x, y + 1, P.grassL);
+}
+function flowerPatch(ctx, x, y, rnd) {
+  const cols = [['#f4f0e6', '#f7d64a'], ['#e5546b', '#ffd6de'], ['#f7d64a', '#e58f1f'], ['#a678d8', '#f2e2ff'], ['#ff8fb1', '#fff']];
+  const [petal, mid] = pick(rnd, cols);
+  const n = 2 + Math.floor(rnd() * 3);
+  for (let i = 0; i < n; i++) {
+    const fx = x + Math.floor(rnd() * 9), fy = y + Math.floor(rnd() * 6);
+    px(ctx, fx, fy + 2, P.grassDD); px(ctx, fx, fy + 3, P.grassDD);
+    px(ctx, fx - 1, fy, petal); px(ctx, fx + 1, fy, petal); px(ctx, fx, fy - 1, petal); px(ctx, fx, fy + 1, petal);
+    px(ctx, fx, fy, mid);
+  }
+}
+function rock(ctx, x, y, s = 1) {
+  shadowEllipse(ctx, x + 3 * s, y + 4 * s, 4 * s, 1 + s);
+  ellipse(ctx, x + 3 * s, y + 2 * s, 3 * s, 2 * s, P.stoneD);
+  ellipse(ctx, x + 3 * s - 1, y + 2 * s - 1, 2 * s, 1 + (s > 1 ? 1 : 0), P.stone);
+  px(ctx, x + 2 * s - 1, y + s - 1, P.stoneL);
+}
+
+/* cobblestone path tile (running bond, world-aligned) with organic grass edges */
+function pathTile(ctx, tx, ty, mask, rnd) {
+  const x = tx * TILE, y = ty * TILE;
+  R(ctx, x, y, TILE, TILE, '#c99d68');
+  const bases = ['#e7c590', '#eacb98', '#e2be87', '#e5c28c'];
+  for (let r = 0; r < 2; r++) {
+    const sy = y + r * 8, row = ty * 2 + r, off = (row % 2) * 5;
+    for (let sx = x - 10 - ((x - off) % 10 + 10) % 10 + 0; sx < x + TILE; sx += 10) {
+      const x0 = Math.max(sx, x), x1 = Math.min(sx + 9, x + TILE);
+      if (x1 <= x0) continue;
+      const h = hashStr(row + ':' + sx);
+      const base = bases[h % 4];
+      R(ctx, x0, sy, x1 - x0, 7, base);
+      R(ctx, x0, sy, x1 - x0, 1, '#f2d9aa');
+      R(ctx, x0, sy + 6, x1 - x0, 1, '#d6ae76');
+      if (sx + 8 < x + TILE && sx + 8 >= x) R(ctx, sx + 8, sy + 1, 1, 6, '#d6ae76');
+      if ((h >> 3) % 7 === 0) px(ctx, Math.min(x1 - 1, x0 + 3), sy + 3, '#d0a46c');
+    }
+  }
+  const n = (dx, dy) => { const yy = ty + dy, xx = tx + dx; return yy >= 0 && yy < mask.length && xx >= 0 && xx < mask[0].length && mask[yy][xx]; };
+  const grassEdge = (side) => {
+    for (let i = 0; i < TILE; i++) {
+      const d = rnd() < 0.45 ? 1 : (rnd() < 0.35 ? 2 : 0);
+      const c = i % 4 === 1 ? P.grassD : P.grass;
+      if (side === 'top') R(ctx, x + i, y, 1, d + 1, c);
+      if (side === 'bottom') R(ctx, x + i, y + TILE - d - 1, 1, d + 1, c);
+      if (side === 'left') R(ctx, x, y + i, d + 1, 1, c);
+      if (side === 'right') R(ctx, x + TILE - d - 1, y + i, d + 1, 1, c);
+    }
+  };
+  if (!n(0, -1)) { R(ctx, x, y + 1, TILE, 1, P.dirtDD); grassEdge('top'); }
+  if (!n(0, 1)) { R(ctx, x, y + TILE - 2, TILE, 1, P.dirtDD); grassEdge('bottom'); }
+  if (!n(-1, 0)) { R(ctx, x + 1, y, 1, TILE, P.dirtDD); grassEdge('left'); }
+  if (!n(1, 0)) { R(ctx, x + TILE - 2, y, 1, TILE, P.dirtDD); grassEdge('right'); }
+}
+
+function cropPlot(ctx, x, y, w, h, rnd, kinds = ['sprout', 'cabbage', 'pumpkin', 'tomato', 'wheat']) {
+  R(ctx, x - 1, y - 1, w + 2, h + 2, P.soilD);
+  R(ctx, x, y, w, h, P.soil);
+  for (let yy = y + 1; yy < y + h; yy += 5) { R(ctx, x, yy, w, 1, P.soilL); R(ctx, x, yy + 2, w, 1, P.soilD); }
+  const kind = pick(rnd, kinds);
+  for (let yy = y + 1; yy < y + h - 3; yy += 5) {
+    for (let xx = x + 2; xx < x + w - 3; xx += 6) {
+      const k = rnd() < 0.85 ? kind : pick(rnd, kinds);
+      crop(ctx, xx, yy, k, rnd);
+    }
+  }
+}
+function crop(ctx, x, y, kind, rnd) {
+  if (kind === 'sprout') { px(ctx, x + 1, y + 2, P.leafD); px(ctx, x, y + 1, P.leafL); px(ctx, x + 2, y + 1, P.leafL); px(ctx, x + 1, y + 1, P.leaf); return; }
+  if (kind === 'wheat') { for (let i = 0; i < 3; i++) { R(ctx, x + i, y - 1, 1, 4, '#d9b44a'); px(ctx, x + i, y - 2, '#f0d27a'); } return; }
+  R(ctx, x, y + 1, 4, 2, P.leafD); R(ctx, x + 1, y, 2, 1, P.leafL); px(ctx, x - 1, y + 2, P.leaf); px(ctx, x + 4, y + 2, P.leaf);
+  if (kind === 'pumpkin') { R(ctx, x, y + 1, 4, 3, '#e98a2b'); px(ctx, x + 1, y + 1, '#ffb15a'); px(ctx, x + 2, y, P.leafD); }
+  if (kind === 'tomato') { px(ctx, x, y + 1, '#e2443a'); px(ctx, x + 3, y + 2, '#e2443a'); px(ctx, x + 2, y + 3, '#ff6a55'); }
+  if (kind === 'cabbage') { R(ctx, x, y, 4, 3, '#8fd36a'); px(ctx, x + 1, y + 1, '#c8f0a0'); R(ctx, x, y + 2, 4, 1, P.leaf); }
+}
+
+/* ---------------------------------------------------------- nature */
+function tree(ctx, cx, by, kind = 'oak', rnd = Math.random) {
+  if (kind === 'pine') {
+    shadowEllipse(ctx, cx, by, 9, 3);
+    R(ctx, cx - 1, by - 6, 3, 6, P.trunk); px(ctx, cx + 1, by - 6, P.trunkD);
+    const tiers = [[by - 8, 10], [by - 14, 8], [by - 20, 6], [by - 25, 4]];
+    for (const [ty, hw] of tiers) {
+      for (let i = 0; i < 7; i++) {
+        const w = Math.round(hw * (i + 1) / 7);
+        R(ctx, cx - w, ty - 7 + i, 2 * w + 1, 1, P.pine);
+        px(ctx, cx - w, ty - 7 + i, P.pineL); px(ctx, cx + w, ty - 7 + i, P.pineD);
+      }
+      R(ctx, cx - hw, ty, 2 * hw + 1, 1, P.pineD);
+    }
+    px(ctx, cx, by - 33, P.pineL);
+    return;
+  }
+  const pal = kind === 'fall' ? [P.fallDD, P.fallD, P.fall, P.fallL] : kind === 'fruit' ? [P.leafDD, P.leafD, P.leaf, P.leafL] : [P.leafDD, P.leafD, P.leaf, P.leafL];
+  shadowEllipse(ctx, cx, by, 11, 3, 0.25);
+  R(ctx, cx - 2, by - 10, 5, 10, P.trunk); R(ctx, cx + 1, by - 10, 2, 10, P.trunkD);
+  px(ctx, cx - 3, by - 1, P.trunk); px(ctx, cx + 3, by - 1, P.trunkD);
+  const cy = by - 19;
+  disc(ctx, cx, cy + 1, 11, pal[0]);
+  disc(ctx, cx - 4, cy - 1, 8, pal[1]); disc(ctx, cx + 5, cy, 7, pal[1]); disc(ctx, cx, cy - 4, 8, pal[1]);
+  disc(ctx, cx - 3, cy - 4, 6, pal[2]); disc(ctx, cx + 4, cy - 2, 5, pal[2]);
+  disc(ctx, cx - 4, cy - 6, 3, pal[3]); px(ctx, cx + 3, cy - 5, pal[3]); px(ctx, cx + 4, cy - 5, pal[3]);
+  for (let i = 0; i < 10; i++) px(ctx, cx - 8 + Math.floor(rnd() * 16), cy - 6 + Math.floor(rnd() * 12), pal[0]);
+  if (kind === 'fruit') for (let i = 0; i < 6; i++) { const fx = cx - 7 + Math.floor(rnd() * 14), fy = cy - 5 + Math.floor(rnd() * 11); px(ctx, fx, fy, '#e2443a'); px(ctx, fx, fy - 1, '#ff8a70'); }
+}
+function bush(ctx, cx, by, rnd, berries = false) {
+  shadowEllipse(ctx, cx, by, 7, 2);
+  disc(ctx, cx, by - 4, 5, P.leafD); disc(ctx, cx - 3, by - 4, 4, P.leafD); disc(ctx, cx + 3, by - 4, 4, P.leafD);
+  disc(ctx, cx - 1, by - 6, 3, P.leaf); disc(ctx, cx + 3, by - 5, 2, P.leaf); px(ctx, cx - 2, by - 8, P.leafL); px(ctx, cx - 1, by - 8, P.leafL);
+  if (berries) for (let i = 0; i < 4; i++) px(ctx, cx - 4 + Math.floor(rnd() * 9), by - 7 + Math.floor(rnd() * 5), '#d23c5a');
+}
+function stump(ctx, x, y) {
+  shadowEllipse(ctx, x + 4, y + 6, 6, 2);
+  R(ctx, x, y + 1, 9, 5, P.trunk); R(ctx, x + 6, y + 1, 3, 5, P.trunkD);
+  ellipse(ctx, x + 4, y + 1, 4, 1, P.woodL); px(ctx, x + 4, y + 1, P.woodD);
+}
+
+/* ---------------------------------------------------------- props */
+function fenceH(ctx, x, y, len, white = false) {
+  const post = white ? '#f2ede0' : P.woodD, rail = white ? '#ddd5c3' : P.wood, dark = white ? '#b9b09c' : P.woodDD;
+  R(ctx, x, y + 2, len, 2, rail); R(ctx, x, y + 6, len, 2, rail); R(ctx, x, y + 3, len, 1, dark); R(ctx, x, y + 7, len, 1, dark);
+  for (let i = 0; i <= len - 3; i += 8) { R(ctx, x + i, y, 3, 10, post); px(ctx, x + i + 2, y + 1, dark); R(ctx, x + i, y + 9, 3, 1, dark); px(ctx, x + i, y, white ? '#fff' : P.woodL); }
+}
+function fenceV(ctx, x, y, len, white = false) {
+  const post = white ? '#f2ede0' : P.woodD, dark = white ? '#b9b09c' : P.woodDD;
+  R(ctx, x + 1, y, 2, len, white ? '#ddd5c3' : P.wood); R(ctx, x + 2, y, 1, len, dark);
+  for (let i = 0; i <= len - 4; i += 8) { R(ctx, x, y + i, 4, 4, post); R(ctx, x, y + i + 3, 4, 1, dark); }
+}
+function bench(ctx, x, y) {
+  shadowEllipse(ctx, x + 8, y + 7, 9, 2);
+  R(ctx, x + 1, y + 4, 2, 4, P.woodDD); R(ctx, x + 13, y + 4, 2, 4, P.woodDD);
+  R(ctx, x, y, 16, 2, P.wood); R(ctx, x, y + 2, 16, 1, P.woodD); R(ctx, x, y + 3, 16, 2, P.woodL); R(ctx, x, y + 5, 16, 1, P.woodD);
+}
+function lampPost(ctx, x, y) {
+  shadowEllipse(ctx, x + 2, y + 18, 4, 1);
+  R(ctx, x + 1, y + 6, 2, 13, '#3a3a44'); R(ctx, x, y + 17, 4, 2, '#2a2a32');
+  R(ctx, x - 1, y, 6, 6, '#2a2a32'); R(ctx, x, y + 1, 4, 4, '#f6e6a8'); px(ctx, x, y + 1, '#fff');
+  R(ctx, x - 1, y - 1, 6, 1, '#4a4a56');
+}
+function barrel(ctx, x, y) {
+  shadowEllipse(ctx, x + 4, y + 10, 5, 2);
+  R(ctx, x, y + 1, 9, 9, P.wood); R(ctx, x + 6, y + 1, 3, 9, P.woodD); R(ctx, x + 1, y + 1, 2, 9, P.woodL);
+  R(ctx, x, y + 3, 9, 1, '#55565e'); R(ctx, x, y + 7, 9, 1, '#55565e');
+  ellipse(ctx, x + 4, y + 1, 4, 1, P.woodD);
+}
+function crate(ctx, x, y, fill) {
+  shadowEllipse(ctx, x + 5, y + 9, 6, 2);
+  R(ctx, x, y + 2, 10, 7, P.woodD); R(ctx, x + 1, y + 3, 8, 5, P.wood); R(ctx, x + 1, y + 5, 8, 1, P.woodD);
+  if (fill) { R(ctx, x + 1, y, 8, 3, fill); px(ctx, x + 2, y, '#fff8'); px(ctx, x + 6, y + 1, '#0003'); }
+}
+function woodpile(ctx, x, y) {
+  shadowEllipse(ctx, x + 9, y + 10, 11, 2);
+  const log = (lx, ly) => { disc(ctx, lx, ly, 2, P.woodDD); px(ctx, lx, ly, P.woodL); px(ctx, lx - 1, ly - 1, P.woodL); };
+  R(ctx, x, y + 3, 15, 7, P.trunk);
+  for (let i = 0; i < 4; i++) log(x + 2 + i * 4, y + 8);
+  for (let i = 0; i < 3; i++) log(x + 4 + i * 4, y + 4);
+  log(x + 8, y + 1);
+}
+function mailbox(ctx, x, y) {
+  R(ctx, x + 2, y + 5, 2, 7, P.woodD);
+  R(ctx, x, y, 6, 5, '#c23b33'); R(ctx, x, y, 6, 1, '#e26a5f'); px(ctx, x + 6, y + 1, '#f2d24a'); R(ctx, x + 6, y + 1, 1, 3, '#f2d24a');
+}
+function noticeBoard(ctx, x, y) {
+  shadowEllipse(ctx, x + 9, y + 18, 10, 2);
+  R(ctx, x + 2, y + 8, 2, 11, P.woodDD); R(ctx, x + 14, y + 8, 2, 11, P.woodDD);
+  R(ctx, x, y, 18, 12, P.woodDD); R(ctx, x + 1, y + 1, 16, 10, P.woodD);
+  R(ctx, x + 2, y + 2, 5, 6, '#f4ecd8'); R(ctx, x + 8, y + 3, 4, 5, '#fff7c8'); R(ctx, x + 13, y + 2, 3, 4, '#f4d6d6');
+  px(ctx, x + 4, y + 2, P.red); px(ctx, x + 9, y + 3, '#3a6fd0');
+  R(ctx, x - 1, y - 1, 20, 2, P.wood);
+}
+function scarecrow(ctx, x, y) {
+  shadowEllipse(ctx, x + 5, y + 20, 5, 2);
+  R(ctx, x + 4, y + 6, 2, 15, P.woodD); R(ctx, x, y + 9, 10, 2, P.woodD);
+  R(ctx, x + 2, y + 8, 6, 7, '#5b7fc0'); R(ctx, x + 2, y + 12, 6, 1, '#3f5f9a');
+  disc(ctx, x + 5, y + 4, 3, '#f0d79a'); px(ctx, x + 4, y + 4, P.ink); px(ctx, x + 6, y + 4, P.ink);
+  R(ctx, x + 1, y, 9, 2, '#c99a3a'); R(ctx, x + 3, y - 2, 5, 2, '#c99a3a');
+}
+function lilyPad(ctx, x, y, flower) {
+  disc(ctx, x, y, 2, '#4fa84a'); px(ctx, x + 1, y - 1, P.water); px(ctx, x - 1, y, '#7dcc63');
+  if (flower) { px(ctx, x, y - 1, '#ff9ec0'); px(ctx, x - 1, y - 1, '#ffd0e0'); }
+}
+
+/* ---------------------------------------------------------- building parts */
+function signBoard(ctx, text, cx, y) {
+  const tw = textWidth(text), bw = tw + 10, bh = 13, x = Math.round(cx - bw / 2);
+  R(ctx, x + 2, y + bh, 2, 3, P.woodDD); R(ctx, x + bw - 4, y + bh, 2, 3, P.woodDD);
+  R(ctx, x, y, bw, bh, '#6a4120');
+  R(ctx, x + 1, y + 1, bw - 2, bh - 2, P.board);
+  R(ctx, x + 1, y + 1, bw - 2, 1, P.boardL); R(ctx, x + 1, y + bh - 2, bw - 2, 1, P.boardD);
+  px(ctx, x + 2, y + 2, '#6a4120'); px(ctx, x + bw - 3, y + 2, '#6a4120'); px(ctx, x + 2, y + bh - 3, '#6a4120'); px(ctx, x + bw - 3, y + bh - 3, '#6a4120');
+  drawText(ctx, text, x + 5, y + 3, '#4a2810');
+  return { x, y, w: bw, h: bh + 3 };
+}
+function windowAt(ctx, x, y, w = 10, h = 10, shutters = '#6e4325', reg) {
+  R(ctx, x - 1, y - 1, w + 2, h + 2, '#4a3020');
+  R(ctx, x, y, w, h, P.frame);
+  R(ctx, x + 1, y + 1, w - 2, h - 2, P.glass);
+  R(ctx, x + 1, y + Math.floor(h / 2), w - 2, 1, P.frame); R(ctx, x + Math.floor(w / 2), y + 1, 1, h - 2, P.frame);
+  R(ctx, x + 1, y + 1, 2, 1, P.glassHL); px(ctx, x + 1, y + 2, P.glassHL);
+  R(ctx, x + Math.floor(w / 2) + 1, y + h - 3, w - Math.floor(w / 2) - 2, 2, P.glassD);
+  R(ctx, x - 2, y + h + 1, w + 4, 2, P.frameD);
+  if (shutters) { R(ctx, x - 4, y - 1, 3, h + 2, shutters); R(ctx, x + w + 1, y - 1, 3, h + 2, shutters); px(ctx, x - 3, y + 2, '#0003'); px(ctx, x + w + 2, y + 2, '#0003'); }
+  if (reg) reg.push({ x: x + 1, y: y + 1, w: w - 2, h: h - 2 });
+}
+function door(ctx, x, y, w = 10, h = 15, color = P.wood, dbl = false) {
+  R(ctx, x - 2, y - 2, w + 4, h + 2, '#4a3020');
+  R(ctx, x - 1, y - 1, w + 2, h + 1, P.woodDD);
+  R(ctx, x, y, w, h, color);
+  for (let i = 2; i < w; i += 3) R(ctx, x + i, y + 1, 1, h - 1, P.woodD);
+  R(ctx, x, y, w, 1, P.woodL);
+  if (dbl) { R(ctx, x + Math.floor(w / 2), y, 1, h, P.woodDD); px(ctx, x + Math.floor(w / 2) - 2, y + 8, P.gold); px(ctx, x + Math.floor(w / 2) + 2, y + 8, P.gold); }
+  else px(ctx, x + w - 3, y + 8, P.gold);
+  R(ctx, x - 3, y + h, w + 6, 2, P.stone); R(ctx, x - 3, y + h + 1, w + 6, 1, P.stoneD);
+}
+function hipRoof(ctx, x, y, w, h, roof, slope = 0.45) {
+  for (let i = 0; i < h; i++) {
+    const inset = Math.floor((h - 1 - i) * slope);
+    const rx = x + inset, rw = w - inset * 2;
+    R(ctx, rx, y + i, rw, 1, roof.base);
+    if (i % 4 === 3) R(ctx, rx, y + i, rw, 1, roof.dark);
+    else { const off = (Math.floor(i / 4) % 2) * 4; for (let xx = rx + off; xx < rx + rw; xx += 8) px(ctx, xx, y + i, roof.dark); }
+    px(ctx, rx, y + i, roof.light); px(ctx, rx + 1, y + i, roof.light);
+    px(ctx, rx + rw - 1, y + i, roof.ridge); px(ctx, rx + rw - 2, y + i, roof.dark);
+  }
+  const topInset = Math.floor((h - 1) * slope);
+  R(ctx, x + topInset, y, w - topInset * 2, 2, roof.ridge); R(ctx, x + topInset, y + 2, w - topInset * 2, 1, roof.light);
+  R(ctx, x, y + h - 2, w, 2, roof.ridge);
+}
+function plankWall(ctx, x, y, w, h, wall, rnd) {
+  R(ctx, x, y, w, h, wall.base);
+  for (let yy = y + 3; yy < y + h; yy += 4) R(ctx, x, yy, w, 1, wall.dark);
+  for (let yy = y; yy < y + h; yy += 4) { const seam = x + 6 + Math.floor(rnd() * (w - 12)); px(ctx, seam, yy + 1, wall.dark); px(ctx, seam, yy + 2, wall.dark); px(ctx, seam + 1, yy + 1, wall.light); }
+  R(ctx, x, y, w, 1, wall.light);
+  R(ctx, x, y, 3, h, wall.post); R(ctx, x + w - 3, y, 3, h, wall.post); px(ctx, x + 1, y, wall.light);
+}
+function brickWall(ctx, x, y, w, h, wall) {
+  R(ctx, x, y, w, h, wall.base);
+  for (let yy = y, r = 0; yy < y + h; yy += 4, r++) {
+    R(ctx, x, yy + 3, w, 1, wall.dark);
+    for (let xx = x + (r % 2 ? 4 : 0); xx < x + w; xx += 8) R(ctx, xx, yy, 1, 3, wall.dark);
+    for (let xx = x + (r % 2 ? 5 : 1); xx < x + w - 1; xx += 8) px(ctx, xx, yy, wall.light);
+  }
+}
+function foundation(ctx, x, y, w) {
+  R(ctx, x - 1, y, w + 2, 4, P.stoneD);
+  for (let xx = x; xx < x + w; xx += 6) { R(ctx, xx, y, 5, 3, P.stone); px(ctx, xx, y, P.stoneL); }
+  R(ctx, x - 1, y + 3, w + 2, 1, P.stoneDD);
+}
+function chimney(ctx, x, y, reg) {
+  R(ctx, x - 1, y - 1, 9, 2, '#5a3a2a');
+  R(ctx, x, y, 7, 12, '#a85a44'); for (let yy = y + 2; yy < y + 12; yy += 3) R(ctx, x, yy, 7, 1, '#7d3f2f');
+  R(ctx, x + 5, y, 2, 12, '#8a4a38');
+  if (reg) reg.push({ x: x + 3, y: y - 2 });
+}
+
+/* a house: hip roof on top, plank/brick wall below, door bottom-centre */
+function house(ctx, b, rnd) {
+  const { x, y, w, h } = b;
+  const roofH = Math.round(h * 0.52), wallY = y + roofH - 4, wallH = h - roofH + 4;
+  const wall = WALLS[b.wall || 'plank'], roof = ROOFS[b.roof || 'red'];
+  shadowEllipse(ctx, x + w / 2 + 4, y + h + 1, w / 2 + 6, 4, 0.25);
+  if (b.brick) brickWall(ctx, x, wallY, w, wallH, wall); else plankWall(ctx, x, wallY, w, wallH, wall, rnd);
+  foundation(ctx, x, y + h - 4, w);
+  if (b.chimney !== false) chimney(ctx, x + w - 26, y + 6, b.chimneys);
+  hipRoof(ctx, x - 4, y, w + 8, roofH, roof);
+  ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.fillRect(x, y + roofH, w, 2);
+  const dx = Math.round(x + w / 2 - (b.doorW || 10) / 2);
+  door(ctx, dx, y + h - 17, b.doorW || 10, 15, b.doorColor || P.wood, !!b.dbl);
+  const wy = y + roofH + 6;
+  const nWin = b.windows || 2;
+  if (nWin >= 2) { windowAt(ctx, x + 14, wy, 10, 10, roof.dark, b.win); windowAt(ctx, x + w - 24, wy, 10, 10, roof.dark, b.win); }
+  if (nWin >= 4) { windowAt(ctx, x + 32, wy, 10, 10, roof.dark, b.win); windowAt(ctx, x + w - 42, wy, 10, 10, roof.dark, b.win); }
+  if (b.dormer) { // little gable window in the roof
+    const gx = Math.round(x + w / 2), gy = y + 12;
+    for (let i = 0; i < 9; i++) R(ctx, gx - i, gy + i, i * 2 + 1, 1, roof.dark);
+    R(ctx, gx - 6, gy + 9, 13, 8, wall.base); windowAt(ctx, gx - 3, gy + 10, 7, 6, null, b.win);
+  }
+}
+
+/* ============================================================== the village */
+const T = TILE;
+const SYMBOL_HOUSES = {
+  SPY: { x: 16 * T, y: 15 * T, roof: 'red', wall: 'plank', stall: 0 },
+  QQQ: { x: 25 * T, y: 15 * T, roof: 'teal', wall: 'cream', stall: 1 },
+  IWM: { x: 37 * T, y: 15 * T, roof: 'slate', wall: 'redwood', stall: 2 },
+};
+const EXTRA_LOTS = [
+  { x: 3 * T, y: 25 * T, roof: 'green', wall: 'sage' },
+  { x: 38 * T, y: 25 * T, roof: 'plum', wall: 'blue' },
+];
+const HOUSE_W = 7 * T, HOUSE_H = 6 * T, LOT_H = 5 * T;
+
+const World = {
+  buildings: {},       // id -> {id, kind, label, x,y,w,h, door:{x,y}, win:[], chimneys:[], hit:{x,y,w,h}}
+  houses: {},          // symbol -> building
+  segments: [],        // path centre-lines [{x1,y1,x2,y2,w}]
+  nodes: [], adj: [],  // path graph
+  water: [],           // shimmer points
+  pondMask: null,
+  lamps: [],
+  stalls: [],          // market stall spots
+  marketExtraSpots: [],
+  lotAssign: {},       // symbol -> extra lot index
+  staticCanvas: null,
+  rev: 0,
+};
+
+/* ------------------------------------------------------------ layout */
+function seg(x1, y1, x2, y2, w = 2) { World.segments.push({ x1, y1, x2, y2, w }); }
+
+function buildLayout() {
+  World.segments = [];
+  // main roads (2 tiles wide), centre-lines sit on tile boundaries
+  seg(8, 176, 760, 176);           // A: main street
+  seg(224, 176, 224, 496);         // V1
+  seg(544, 176, 544, 496);         // V2
+  seg(224, 384, 752, 384);         // B: houses street
+  seg(8, 496, 760, 496);           // C: south lane
+  // door connectors
+  seg(88, 146, 88, 176, 1);        // mayor
+  seg(376, 148, 376, 176, 2);      // profit room
+  seg(536, 148, 536, 176, 1);      // silo
+  seg(664, 146, 664, 176, 2);      // market gate
+  seg(664, 108, 664, 146, 1);      // market aisle
+  seg(616, 108, 712, 108, 1);      // stall row
+  seg(640, 128, 704, 128, 1);      // extra market spots
+  for (const [sym, h] of Object.entries(SYMBOL_HOUSES)) seg(h.x + HOUSE_W / 2, h.y + HOUSE_H + 4, h.x + HOUSE_W / 2, 384, 1);
+  for (const lot of EXTRA_LOTS) seg(lot.x + HOUSE_W / 2, lot.y + LOT_H + 4, lot.x + HOUSE_W / 2, 496, 1);
+
+  const B = World.buildings = {};
+  B.profit = { id: 'profit', kind: 'profit', label: 'PROFIT ROOM', x: 256, y: 8, w: 240, h: 136, door: { x: 376, y: 150 }, win: [], chimneys: [] };
+  B.mayor = { id: 'mayor', kind: 'mayor', label: "MAYOR'S OFFICE", x: 32, y: 48, w: 112, h: 96, door: { x: 88, y: 150 }, win: [], chimneys: [] };
+  B.silo = { id: 'silo', kind: 'silo', label: 'SILO', x: 512, y: 24, w: 48, h: 120, door: { x: 536, y: 152 }, win: [], chimneys: [] };
+  B.market = { id: 'market', kind: 'market', label: 'MARKETS', x: 576, y: 16, w: 176, h: 144, door: { x: 664, y: 150 }, win: [], chimneys: [] };
+  World.stalls = [{ x: 616, y: 108 }, { x: 664, y: 108 }, { x: 712, y: 108 }];
+  World.marketExtraSpots = [{ x: 640, y: 128 }, { x: 688, y: 128 }, { x: 704, y: 128 }, { x: 656, y: 136 }];
+  World.houses = {};
+  for (const [sym, h] of Object.entries(SYMBOL_HOUSES)) addHouse(sym, h.x, h.y, HOUSE_H, h.roof, h.wall, h.stall);
+  for (const [sym, idx] of Object.entries(World.lotAssign)) {
+    const lot = EXTRA_LOTS[idx];
+    addHouse(sym, lot.x, lot.y, LOT_H, lot.roof, lot.wall, -1, idx);
+  }
+  for (const b of Object.values(B)) if (!b.hit) b.hit = { x: b.x - 4, y: b.y - 14, w: b.w + 8, h: b.h + 18 };
+  buildGraph();
+}
+
+function addHouse(sym, x, y, h, roof, wall, stall, lotIdx = null) {
+  const id = 'house:' + sym;
+  const labelSyms = Object.entries(World.lotAssign).filter(([s, i]) => i === lotIdx).map(([s]) => s);
+  const label = lotIdx == null ? `${sym} HOUSE` : (labelSyms.length > 1 ? `${labelSyms[0]}+${labelSyms.length - 1} HOUSE` : `${sym} HOUSE`);
+  const doorX = x + HOUSE_W / 2;
+  const b = {
+    id, kind: 'house', sym, label, x, y, w: HOUSE_W, h, roof, wall, stall, lotIdx,
+    door: { x: doorX, y: y + h + 6 }, win: [], chimneys: [],
+    spots: {
+      door: { x: doorX, y: y + h + 6 },
+      wood: { x: x + 24, y: y + h + 13, face: 'left' },
+      bench: { x: x + HOUSE_W - 22, y: y + h + 14 },
+      crops: lotIdx == null ? { x: x + 40, y: y - 10 } : null,
+      side: lotIdx == null ? { x: x + HOUSE_W + 10, y: y + h + 8 } : null,
+      sideBack: lotIdx == null ? { x: x + HOUSE_W + 10, y: y - 10 } : null,
+    },
+  };
+  // existing house for a symbol sharing a lot: alias to the same building
+  if (lotIdx != null) {
+    const existing = Object.values(World.buildings).find(o => o.kind === 'house' && o.lotIdx === lotIdx);
+    if (existing) { existing.label = label; World.houses[sym] = existing; return existing; }
+  }
+  World.buildings[id] = b;
+  World.houses[sym] = b;
+  return b;
+}
+
+function houseFor(sym) {
+  if (World.houses[sym]) return World.houses[sym];
+  // new symbol: build on the next vacant lot (or share the last one)
+  const used = new Set(Object.values(World.lotAssign));
+  let idx = EXTRA_LOTS.findIndex((_, i) => !used.has(i));
+  if (idx < 0) idx = EXTRA_LOTS.length - 1;
+  World.lotAssign[sym] = idx;
+  store.set(STORE_PREFIX + 'lots', World.lotAssign);
+  buildLayout();
+  renderStatic();
+  for (const v of Game.villagers.values()) v.house = World.houses[v.sym] || v.house;  // layout objects were rebuilt
+  return World.houses[sym];
+}
+
+/* ------------------------------------------------------------ path graph */
+function buildGraph() {
+  const pts = [];
+  const key = (x, y) => x + ',' + y;
+  const idx = new Map();
+  const addPt = (x, y) => { const k = key(x, y); if (!idx.has(k)) { idx.set(k, pts.length); pts.push({ x, y }); } return idx.get(k); };
+  const S = World.segments;
+  const onSeg = (s, x, y) => (s.x1 === s.x2 ? (x === s.x1 && y >= Math.min(s.y1, s.y2) && y <= Math.max(s.y1, s.y2)) : (y === s.y1 && x >= Math.min(s.x1, s.x2) && x <= Math.max(s.x1, s.x2)));
+  const cuts = S.map(s => [{ x: s.x1, y: s.y1 }, { x: s.x2, y: s.y2 }]);
+  for (let i = 0; i < S.length; i++) for (let j = 0; j < S.length; j++) {
+    if (i === j) continue;
+    const a = S[i], b = S[j];
+    for (const p of [{ x: b.x1, y: b.y1 }, { x: b.x2, y: b.y2 }]) if (onSeg(a, p.x, p.y)) cuts[i].push(p);
+    const aV = a.x1 === a.x2, bV = b.x1 === b.x2;
+    if (aV !== bV) { const v = aV ? a : b, h = aV ? b : a; const p = { x: v.x1, y: h.y1 }; if (onSeg(v, p.x, p.y) && onSeg(h, p.x, p.y)) cuts[i].push(p); }
+  }
+  const adj = [];
+  cuts.forEach((list, i) => {
+    const s = S[i], vert = s.x1 === s.x2;
+    list.sort((p, q) => vert ? p.y - q.y : p.x - q.x);
+    for (let k = 0; k < list.length - 1; k++) {
+      const u = addPt(list[k].x, list[k].y), v = addPt(list[k + 1].x, list[k + 1].y);
+      if (u === v) continue;
+      (adj[u] ||= []).push(v); (adj[v] ||= []).push(u);
+    }
+  });
+  World.nodes = pts; World.adj = adj;
+}
+function nearestNode(x, y) {
+  let best = 0, bd = Infinity;
+  World.nodes.forEach((n, i) => { const d = dist(x, y, n.x, n.y); if (d < bd) { bd = d; best = i; } });
+  return best;
+}
+/* route along paths from (x,y) to (tx,ty); start/end hop on/off the nearest graph nodes */
+function route(x, y, tx, ty) {
+  const s = nearestNode(x, y), t = nearestNode(tx, ty);
+  const N = World.nodes, prev = new Array(N.length).fill(-1), d = new Array(N.length).fill(Infinity);
+  d[s] = 0; const open = new Set([s]);
+  while (open.size) {
+    let u = -1, bu = Infinity; for (const o of open) if (d[o] < bu) { bu = d[o]; u = o; }
+    open.delete(u); if (u === t) break;
+    for (const v of World.adj[u] || []) { const nd = d[u] + dist(N[u].x, N[u].y, N[v].x, N[v].y); if (nd < d[v]) { d[v] = nd; prev[v] = u; open.add(v); } }
+  }
+  const path = []; for (let u = t; u !== -1; u = prev[u]) { path.unshift({ x: N[u].x, y: N[u].y }); if (u === s) break; }
+  if (!path.length || path[0].x !== N[s].x || path[0].y !== N[s].y) return [{ x: tx, y: ty }];
+  if (dist(x, y, path[0].x, path[0].y) < 2) path.shift();
+  path.push({ x: tx, y: ty });
+  return path;
+}
+
+/* ------------------------------------------------------------ static render */
+function inPond(x, y) {
+  const e = (cx, cy, rx, ry) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1;
+  return e(96, 262, 66, 44) || e(60, 296, 34, 24) || e(140, 240, 30, 22);
+}
+
+function renderStatic() {
+  const c = World.staticCanvas || (World.staticCanvas = document.createElement('canvas'));
+  c.width = WORLD_W; c.height = WORLD_H;
+  const ctx = c.getContext('2d');
+  const rnd = mulberry32(1337);
+  for (const b of Object.values(World.buildings)) { b.win = []; b.chimneys = []; }
+  World.lamps = [];
+
+  // occupancy grid (tiles) so decoration never lands on roads/buildings
+  const occ = Array.from({ length: 32 }, () => new Array(48).fill(false));
+  const mark = (x, y, w, h) => { for (let ty = Math.floor(y / T); ty < Math.ceil((y + h) / T); ty++) for (let tx = Math.floor(x / T); tx < Math.ceil((x + w) / T); tx++) if (occ[ty] && tx >= 0 && tx < 48) occ[ty][tx] = true; };
+
+  // grass
+  R(ctx, 0, 0, WORLD_W, WORLD_H, P.grass);
+  for (let i = 0; i < 90; i++) ellipse(ctx, Math.floor(rnd() * WORLD_W), Math.floor(rnd() * WORLD_H), 8 + Math.floor(rnd() * 22), 4 + Math.floor(rnd() * 10), rnd() < 0.55 ? P.grassL : P.grassD);
+  for (let i = 0; i < 4200; i++) px(ctx, Math.floor(rnd() * WORLD_W), Math.floor(rnd() * WORLD_H), rnd() < 0.5 ? P.grassL : P.grassD);
+  for (let i = 0; i < 900; i++) { const x = Math.floor(rnd() * WORLD_W), y = Math.floor(rnd() * WORLD_H); px(ctx, x, y, P.grassDD); px(ctx, x, y - 1, P.grassD); }
+
+  // path mask
+  const mask = Array.from({ length: 32 }, () => new Array(48).fill(false));
+  for (const s of World.segments) {
+    const half = s.w * T / 2;
+    const x0 = Math.min(s.x1, s.x2) - (s.x1 === s.x2 ? half : 0), x1 = Math.max(s.x1, s.x2) + (s.x1 === s.x2 ? half : 0);
+    const y0 = Math.min(s.y1, s.y2) - (s.y1 === s.y2 ? half : 0), y1 = Math.max(s.y1, s.y2) + (s.y1 === s.y2 ? half : 0);
+    for (let ty = Math.floor(y0 / T); ty < Math.ceil(y1 / T); ty++) for (let tx = Math.floor(x0 / T); tx < Math.ceil(x1 / T); tx++) if (mask[ty] && tx >= 0 && tx < 48) mask[ty][tx] = true;
+  }
+  // market interior is a plaza, not grass
+  for (let ty = 6; ty <= 9; ty++) for (let tx = 37; tx <= 45; tx++) mask[ty][tx] = true;
+  for (let ty = 0; ty < 32; ty++) for (let tx = 0; tx < 48; tx++) if (mask[ty][tx]) { occ[ty][tx] = true; }
+  for (let ty = 0; ty < 32; ty++) for (let tx = 0; tx < 48; tx++) if (mask[ty][tx]) pathTile(ctx, tx, ty, mask, rnd);
+
+  // pond with stone shore, depth shading, lily pads and a dock
+  const pw = 200, ph = 140, ox = 0, oy = 196;
+  const inside = (x, y) => inPond(x, y);
+  const depth = new Map();
+  World.water = [];
+  for (let y = oy; y < oy + ph; y++) for (let x = ox; x < ox + pw; x++) {
+    if (!inside(x, y)) continue;
+    let d = 0; for (let r = 1; r <= 8; r++) { if (!inside(x + r, y) || !inside(x - r, y) || !inside(x, y + r) || !inside(x, y - r)) { d = r; break; } d = 9; }
+    let col;
+    if (d <= 1) col = P.shoreD; else if (d <= 3) col = ((x + y) % 5 === 0) ? P.stoneL : (((x * 7 + y * 3) % 4) ? P.stone : P.stoneD);
+    else if (d <= 4) col = P.waterDD; else if (d <= 6) col = P.waterL; else col = d >= 9 ? P.waterD : P.water;
+    px(ctx, x, y, col);
+    if (d >= 8 && rnd() < 0.012) World.water.push({ x, y, p: rnd() * 6.28, l: 2 + Math.floor(rnd() * 3) });
+  }
+  for (let ty = 12; ty < 21; ty++) for (let tx = 0; tx < 13; tx++) if (inPond(tx * T + 8, ty * T + 8) || inPond(tx * T, ty * T) || inPond(tx * T + 15, ty * T + 15)) occ[ty][tx] = true;
+  lilyPad(ctx, 70, 250, true); lilyPad(ctx, 120, 286, false); lilyPad(ctx, 52, 300, true); lilyPad(ctx, 150, 236, false);
+  // dock
+  for (let i = 0; i < 4; i++) { R(ctx, 104 + i * 6, 214, 5, 26, P.wood); R(ctx, 104 + i * 6, 214, 1, 26, P.woodL); R(ctx, 108 + i * 6, 214, 1, 26, P.woodD); }
+  R(ctx, 104, 238, 24, 2, P.woodDD); R(ctx, 104, 240, 2, 4, P.woodDD); R(ctx, 125, 240, 2, 4, P.woodDD);
+
+  // farm field (south) and crop plots behind each house
+  mark(256, 408, 256, 72);
+  cropPlot(ctx, 264, 416, 108, 52, rnd, ['wheat']);
+  cropPlot(ctx, 388, 416, 108, 52, rnd, ['pumpkin', 'cabbage']);
+  for (const h of Object.values(World.houses)) if (h.lotIdx == null && h.spots.crops) { cropPlot(ctx, h.x + 6, h.y - 36, 84, 22, rnd); mark(h.x, h.y - 38, 96, 26); }
+
+  // objects, painter-sorted by their base y
+  const objs = [];
+  const add = (baseY, fn) => objs.push({ baseY, fn });
+
+  // trees: hand-placed clusters + border
+  const trees = [
+    [168, 40, 'oak'], [196, 30, 'pine'], [226, 46, 'fall'], [184, 72, 'fruit'], [218, 92, 'oak'], [176, 108, 'pine'],
+    [14, 30, 'pine'], [10, 72, 'oak'], [14, 120, 'fall'],
+    [576 - 10, 40, 'pine'], [566, 90, 'oak'],
+    [16, 380, 'oak'], [12, 430, 'pine'], [176, 430, 'fall'], [200, 456, 'oak'],
+    [756, 230, 'pine'], [756, 300, 'oak'], [740, 448, 'fall'], [756, 470, 'pine'],
+    [536, 448, 'oak'], [528, 420, 'fruit'],
+    [180, 220, 'fall'], [196, 330, 'oak'],
+    [740, 210, 'oak'], [712, 300, 'fruit'],
+  ];
+  for (const [x, y, k] of trees) { add(y, c2 => tree(c2, x, y, k, rnd)); mark(x - 10, y - 30, 20, 30); }
+  // fences around the farm field
+  add(410, c2 => { fenceH(c2, 256, 404, 252); });
+  add(480, c2 => { fenceH(c2, 256, 474, 252); fenceV(c2, 254, 406, 72); fenceV(c2, 506, 406, 72); });
+  add(450, c2 => scarecrow(c2, 376, 428));
+  // lamps along the main street
+  for (const lx of [40, 152, 296, 456, 600, 728]) { add(160, c2 => lampPost(c2, lx, 141 + 4)); World.lamps.push({ x: lx + 2, y: 148 }); }
+  for (const lx of [256, 520, 716]) { add(360, c2 => lampPost(c2, lx, 346)); World.lamps.push({ x: lx + 2, y: 349 }); }
+  // benches, barrels, board
+  add(206, c2 => bench(c2, 136, 198)); add(206, c2 => bench(c2, 566, 200));
+  add(140, c2 => noticeBoard(c2, 156, 122)); mark(152, 120, 24, 24);
+  add(152, c2 => { crate(c2, 722, 134, '#f2c23a'); barrel(c2, 736, 120); });
+
+  // buildings
+  const BB = World.buildings;
+  add(BB.profit.y + BB.profit.h, c2 => drawProfitRoom(c2, BB.profit, rnd));
+  add(BB.mayor.y + BB.mayor.h, c2 => drawMayorOffice(c2, BB.mayor, rnd));
+  add(BB.silo.y + BB.silo.h, c2 => drawSilo(c2, BB.silo));
+  add(BB.market.y + BB.market.h, c2 => drawMarket(c2, BB.market, rnd));
+  for (const b of Object.values(BB)) mark(b.x, b.y, b.w, b.h);
+  const lotsUsed = new Set(Object.values(World.lotAssign));
+  EXTRA_LOTS.forEach((lot, i) => { if (!lotsUsed.has(i)) add(lot.y + LOT_H, c2 => vacantLot(c2, lot)); mark(lot.x, lot.y, HOUSE_W, LOT_H); });
+  for (const b of Object.values(BB)) if (b.kind === 'house') {
+    add(b.y + b.h, c2 => {
+      house(c2, { x: b.x, y: b.y, w: b.w, h: b.h, roof: b.roof, wall: b.wall, win: b.win, chimneys: b.chimneys, dormer: b.lotIdx == null }, rnd);
+      signBoard(c2, b.label, b.x + b.w / 2, b.y - 8);
+      mailbox(c2, b.x + b.w / 2 + 14, b.y + b.h + 2);
+    });
+    add(b.spots.wood.y, c2 => { woodpile(c2, b.x + 2, b.y + b.h + 6); stump(c2, b.x + 26, b.y + b.h + 10); });
+    add(b.spots.bench.y, c2 => bench(c2, b.x + b.w - 30, b.y + b.h + 10));
+    mark(b.x - 4, b.y - 14, b.w + 8, b.h + 26);
+  }
+
+  // scatter: bushes, flowers, rocks, tufts on free tiles
+  for (let ty = 0; ty < 32; ty++) for (let tx = 0; tx < 48; tx++) {
+    if (occ[ty][tx]) continue;
+    const r = rnd(), x = tx * T, y = ty * T;
+    if (r < 0.07) add(y + 12, c2 => bush(c2, x + 8, y + 12, rnd, rnd() < 0.3));
+    else if (r < 0.2) flowerPatch(ctx, x + 2, y + 4, rnd);
+    else if (r < 0.24) add(y + 8, c2 => rock(c2, x + 4, y + 4, rnd() < 0.3 ? 2 : 1));
+    else if (r < 0.5) grassTuft(ctx, x + Math.floor(rnd() * 10), y + Math.floor(rnd() * 10), rnd);
+  }
+  objs.sort((a, b) => a.baseY - b.baseY).forEach(o => o.fn(ctx));
+  World.rev++;
+}
+
+function vacantLot(ctx, lot) {
+  const cx = lot.x + HOUSE_W / 2;
+  R(ctx, lot.x + 10, lot.y + 20, HOUSE_W - 20, LOT_H - 28, '#8fbf5a');
+  for (const [sx, sy] of [[lot.x + 10, lot.y + 20], [lot.x + HOUSE_W - 12, lot.y + 20], [lot.x + 10, lot.y + LOT_H - 10], [lot.x + HOUSE_W - 12, lot.y + LOT_H - 10]]) { R(ctx, sx, sy - 4, 2, 6, P.woodD); px(ctx, sx, sy - 5, '#e2443a'); }
+  signBoard(ctx, 'VACANT LOT', cx, lot.y + 34);
+}
+
+function drawProfitRoom(ctx, b, rnd) {
+  const { x, y, w, h } = b;
+  shadowEllipse(ctx, x + w / 2 + 6, y + h + 2, w / 2 + 6, 5, 0.25);
+  const wallY = y + 66, wallH = h - 66;
+  brickWall(ctx, x, wallY, w, wallH, WALLS.redwood);
+  foundation(ctx, x, y + h - 4, w);
+  // white trim + pilasters
+  R(ctx, x, wallY, w, 2, '#efe4cc');
+  for (const px_ of [x + 2, x + w - 6, x + w / 2 - 34, x + w / 2 + 30]) { R(ctx, px_, wallY + 2, 4, wallH - 6, '#efe4cc'); R(ctx, px_ + 3, wallY + 2, 1, wallH - 6, '#c9b896'); }
+  chimney(ctx, x + 30, y + 22, b.chimneys); chimney(ctx, x + w - 38, y + 22, b.chimneys);
+  hipRoof(ctx, x - 6, y + 22, w + 12, 50, ROOFS.slate, 0.6);
+  // gold ridge trim
+  R(ctx, x + 24, y + 22, w - 48, 1, P.goldD);
+  ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(x, wallY + 2, w, 2);
+  // central tower with a gold coin emblem
+  const tx = x + w / 2 - 22, tw = 44;
+  brickWall(ctx, tx, y + 18, tw, 50, WALLS.cream);
+  R(ctx, tx, y + 18, tw, 2, P.goldD);
+  for (let i = 0; i < 16; i++) R(ctx, tx - 3 + Math.floor(i * 0.0), y + 2 + i, tw + 6, 1, i % 4 === 3 ? ROOFS.slate.dark : ROOFS.slate.base);
+  for (let i = 0; i < 12; i++) { const ww = Math.max(2, Math.round((tw + 6) * (i + 1) / 12)); R(ctx, x + w / 2 - ww / 2, y - 10 + i, ww, 1, i % 3 === 2 ? ROOFS.slate.dark : ROOFS.slate.base); }
+  R(ctx, x + w / 2 - 1, y - 16, 2, 7, P.goldD); disc(ctx, x + w / 2, y - 17, 2, P.gold);
+  disc(ctx, x + w / 2, y + 40, 11, P.goldDD); disc(ctx, x + w / 2, y + 40, 10, P.goldD); disc(ctx, x + w / 2, y + 39, 8, P.gold);
+  drawText(ctx, '$', x + w / 2 - 2, y + 36, P.goldDD);
+  px(ctx, x + w / 2 - 5, y + 34, P.goldL); px(ctx, x + w / 2 - 4, y + 33, P.goldL);
+  windowAt(ctx, tx + 8, y + 54, 8, 9, null, b.win); windowAt(ctx, tx + tw - 16, y + 54, 8, 9, null, b.win);
+  // windows: two rows either side of the door
+  const shut = ROOFS.slate.dark;
+  for (const wx of [x + 18, x + 46, x + 74, x + w - 28, x + w - 56, x + w - 84]) { windowAt(ctx, wx, wallY + 12, 10, 12, shut, b.win); windowAt(ctx, wx, wallY + 38, 10, 12, shut, b.win); }
+  // grand door, columns, steps
+  const dx = x + w / 2 - 12;
+  R(ctx, dx - 6, wallY + 22, 36, 4, '#efe4cc');
+  door(ctx, dx, wallY + 40, 24, 26, '#8b3a2a', true);
+  R(ctx, dx - 8, wallY + 26, 4, 40, '#f4ecd8'); R(ctx, dx + 28, wallY + 26, 4, 40, '#f4ecd8');
+  R(ctx, dx - 5, wallY + 26, 1, 40, '#c9b896'); R(ctx, dx + 31, wallY + 26, 1, 40, '#c9b896');
+  R(ctx, dx - 12, y + h, 48, 3, P.stone); R(ctx, dx - 12, y + h + 2, 48, 1, P.stoneD);
+  signBoard(ctx, 'PROFIT ROOM', x + w / 2, wallY + 7);
+  // flower boxes
+  for (const fx of [x + 16, x + w - 30]) { R(ctx, fx, y + h - 10, 14, 4, P.woodD); for (let i = 0; i < 5; i++) px(ctx, fx + 1 + i * 3, y + h - 11, i % 2 ? '#e5546b' : '#f7d64a'); }
+}
+
+function drawMayorOffice(ctx, b, rnd) {
+  house(ctx, { x: b.x, y: b.y, w: b.w, h: b.h, roof: 'plum', wall: 'blue', win: b.win, chimneys: b.chimneys, windows: 2, doorColor: '#6b3fa0' }, rnd);
+  // flag
+  const fx = b.x + 20, fy = b.y - 18;
+  R(ctx, fx, fy, 2, 26, '#d8d8d8'); R(ctx, fx + 2, fy + 1, 12, 8, '#3a6fd0'); R(ctx, fx + 2, fy + 5, 12, 1, '#f0f0f0'); px(ctx, fx + 4, fy + 2, '#fff'); px(ctx, fx + 6, fy + 3, '#fff');
+  signBoard(ctx, "MAYOR'S OFFICE", b.x + b.w / 2, b.y - 8);
+  // stone urns
+  for (const ux of [b.x + 30, b.x + b.w - 38]) { R(ctx, ux, b.y + b.h - 8, 8, 7, P.stone); R(ctx, ux - 1, b.y + b.h - 9, 10, 2, P.stoneL); disc(ctx, ux + 4, b.y + b.h - 12, 3, P.leaf); }
+}
+
+function drawSilo(ctx, b) {
+  const { x, y, w, h } = b;
+  shadowEllipse(ctx, x + w / 2 + 4, y + h + 1, w / 2 + 4, 4, 0.25);
+  const bandCols = ['#b8c2c8', '#cfd8dd', '#dfe7ea', '#cfd8dd', '#b8c2c8', '#a3adb4', '#8e98a0'];
+  for (let i = 0; i < w; i++) R(ctx, x + i, y + 20, 1, h - 20, bandCols[Math.min(bandCols.length - 1, Math.floor(i / w * bandCols.length))]);
+  for (let yy = y + 32; yy < y + h - 4; yy += 16) { R(ctx, x, yy, w, 2, '#7f8a92'); R(ctx, x, yy, w, 1, '#e8eef0'); }
+  // dome
+  for (let i = 0; i < 22; i++) { const ww = Math.round(w * Math.sqrt(1 - ((21 - i) / 22) ** 2)); R(ctx, x + (w - ww) / 2, y + i, ww, 1, i < 4 ? '#c9473d' : '#b23a32'); px(ctx, x + (w - ww) / 2 + 2, y + i, '#d9675b'); }
+  R(ctx, x - 1, y + 20, w + 2, 2, '#7d2a24');
+  // gauge window (filled dynamically)
+  R(ctx, x + w / 2 - 6, y + 34, 12, 70, '#3a3f44'); R(ctx, x + w / 2 - 5, y + 35, 10, 68, '#1d2226');
+  b.gauge = { x: x + w / 2 - 5, y: y + 35, w: 10, h: 68 };
+  R(ctx, x + w / 2 - 6, y + h - 14, 12, 14, '#6b4a2a'); R(ctx, x + w / 2 - 5, y + h - 13, 10, 13, '#8a5a33');
+  signBoard(ctx, 'SILO', x + w / 2, y - 12);
+}
+
+function drawMarket(ctx, b, rnd) {
+  const { x, y, w, h } = b;
+  // hedge with a gate gap at the bottom centre
+  const gate0 = 648, gate1 = 680;
+  const hedgeSeg = (hx, hy, hw, hh) => { R(ctx, hx, hy, hw, hh, P.hedgeD); R(ctx, hx + 1, hy, hw - 2, hh - 2, P.hedge); for (let i = hx + 1; i < hx + hw - 1; i += 3) px(ctx, i, hy, P.hedgeL); for (let j = hy + 1; j < hy + hh - 2; j += 3) px(ctx, hx + 1, j, P.hedgeL); };
+  hedgeSeg(x, y, w, 9); hedgeSeg(x, y, 9, h); hedgeSeg(x + w - 9, y, 9, h);
+  hedgeSeg(x, y + h - 9, gate0 - x, 9); hedgeSeg(gate1, y + h - 9, x + w - gate1, 9);
+  // gate posts
+  R(ctx, gate0 - 3, y + h - 16, 4, 16, P.woodD); R(ctx, gate1 - 1, y + h - 16, 4, 16, P.woodD);
+  // stalls
+  const stallCols = [ROOFS.red, ROOFS.teal, ROOFS.slate];
+  const syms = ['SPY', 'QQQ', 'IWM'];
+  World.stalls.forEach((s, i) => {
+    const sx = s.x - 22, sy = 44, sw = 44, col = stallCols[i];
+    shadowEllipse(ctx, s.x, sy + 50, 24, 3, 0.2);
+    R(ctx, sx + 2, sy + 10, 2, 40, P.woodDD); R(ctx, sx + sw - 4, sy + 10, 2, 40, P.woodDD);
+    // counter with produce crates
+    R(ctx, sx, sy + 34, sw, 16, P.woodD); R(ctx, sx + 1, sy + 35, sw - 2, 14, P.wood); R(ctx, sx + 1, sy + 41, sw - 2, 1, P.woodD); R(ctx, sx, sy + 34, sw, 1, P.woodL);
+    const produce = [['#e2443a', '#ff8a70'], ['#f2c23a', '#fff1a6'], ['#7cc95a', '#c8f0a0'], ['#e98a2b', '#ffb15a']];
+    for (let k = 0; k < 4; k++) { const [c1, c2] = produce[(k + i) % 4]; R(ctx, sx + 3 + k * 10, sy + 29, 9, 6, P.woodDD); for (let q = 0; q < 4; q++) { px(ctx, sx + 4 + k * 10 + q * 2, sy + 30, c1); px(ctx, sx + 5 + k * 10 + q * 2, sy + 31, c1); } px(ctx, sx + 5 + k * 10, sy + 30, c2); }
+    // striped awning
+    for (let yy = 0; yy < 14; yy++) for (let xx = 0; xx < sw + 4; xx++) px(ctx, sx - 2 + xx, sy + yy, (Math.floor(xx / 6) % 2) ? '#f6efe0' : col.base);
+    for (let xx = 0; xx < sw + 4; xx += 6) { R(ctx, sx - 2 + xx, sy + 14, 6, 1, (Math.floor(xx / 6) % 2) ? '#e7dcc6' : col.dark); R(ctx, sx - 1 + xx, sy + 15, 4, 1, (Math.floor(xx / 6) % 2) ? '#e7dcc6' : col.dark); }
+    R(ctx, sx - 2, sy, sw + 4, 1, col.light); R(ctx, sx - 2, sy + 13, sw + 4, 1, '#0002');
+    // ticker plate on the awning
+    const tw = textWidth(syms[i]) + 6; R(ctx, s.x - tw / 2, sy - 9, tw, 10, '#3b2414'); R(ctx, s.x - tw / 2 + 1, sy - 8, tw - 2, 8, '#f6efe0'); drawText(ctx, syms[i], s.x - tw / 2 + 3, sy - 8 + 0.5, col.dark);
+  });
+  // chalk ticker board by the gate (text drawn live)
+  R(ctx, 585, 126, 44, 24, P.woodDD); R(ctx, 587, 128, 40, 20, '#2e3b33'); R(ctx, 585, 126, 44, 1, P.wood);
+  b.board = { x: 589, y: 130, w: 36, h: 16 };
+  signBoard(ctx, 'MARKETS', x + w / 2, y - 12);
+}
+
+/* ============================================================== sprites, villagers, the Mayor, critters, particles */
+const Game = { time: 0, particles: [], floats: [], villagers: new Map(), mayor: null, ducks: [], bugs: [], goldToday: 0, startedAt: 0 };
+const ABORT = Symbol('abort');
+const BOT_COLORS = [['#d9534f', '#a8352f'], ['#3f7fd6', '#2b5ea8'], ['#8e5bd1', '#6a3fa6'], ['#e08a2b', '#b0661a'], ['#1f9e8a', '#157262'], ['#d14f9a', '#a33676']];
+const SKINS = ['#f2c7a0', '#e0a882', '#c68a62', '#9a6644', '#f5d3b3'];
+const HAIRS = ['#5a3a22', '#2b2b33', '#c9782f', '#e5c56a', '#7a2f2a', '#8a8a92'];
+const PANTS = ['#3c4f7a', '#4a3a2a', '#2f4f3f', '#5a4a6a'];
+const STYLES = ['straw', 'cap', 'bun', 'short', 'long'];
+const SYMBOL_LOOK = { SPY: { style: 'straw', hair: 2 }, QQQ: { style: 'cap', hair: 1 }, IWM: { style: 'bun', hair: 0 } };
+
+/* ---------------------------------------------------------- person sprite (cached, auto-outlined) */
+const spriteCache = new Map();
+function personSprite(look, dir, frame, pose, mood) {
+  const key = [look.id, dir, frame, pose, mood].join('|');
+  let c = spriteCache.get(key);
+  if (c) return c;
+  c = document.createElement('canvas'); c.width = 16; c.height = 24;
+  const g = c.getContext('2d');
+  const flip = dir === 'right';
+  const d = dir === 'right' ? 'left' : dir;
+  const o = { x: 3, y: 2 };
+  const P_ = (x, y, w, h, col) => R(g, o.x + x, o.y + y, w, h, col);
+  const { skin, hair, shirt, shirtD, pants, style } = look;
+  const shoes = '#3a2618';
+  const walkL = pose === 'walk' && frame === 1, walkR = pose === 'walk' && frame === 3;
+  const bob = pose === 'walk' && (frame === 1 || frame === 3) ? -1 : 0;
+  // legs
+  if (pose === 'sit') {
+    P_(1, 15, 3, 2, pants); P_(6, 15, 3, 2, pants); P_(1, 17, 3, 1, shoes); P_(6, 17, 3, 1, shoes);
+  } else if (d === 'left') {
+    const fwd = walkL ? -1 : walkR ? 1 : 0;
+    P_(3 + fwd, 15, 3, 3 - (walkL ? 1 : 0), pants); P_(4 - fwd, 15, 3, 3 - (walkR ? 1 : 0), shirtD === pants ? pants : pants);
+    P_(3 + fwd, 18 - (walkL ? 1 : 0), 3, 1, shoes); P_(4 - fwd, 18 - (walkR ? 1 : 0), 3, 1, shoes);
+  } else {
+    P_(2, 15, 2, 3 - (walkL ? 1 : 0), pants); P_(6, 15, 2, 3 - (walkR ? 1 : 0), pants);
+    P_(2, 18 - (walkL ? 1 : 0), 2, 1, shoes); P_(6, 18 - (walkR ? 1 : 0), 2, 1, shoes);
+    P_(2, 15, 6, 1, pants);
+  }
+  // torso
+  const ty = 9 + bob;
+  if (d === 'left') {
+    P_(2, ty, 6, 6, shirt); P_(2, ty + 5, 6, 1, shirtD);
+    const sw = pose === 'walk' ? (frame === 1 ? -1 : frame === 3 ? 1 : 0) : 0;
+    P_(4 + sw, ty + 1, 2, 4, shirtD); P_(4 + sw, ty + 5, 2, 1, skin);
+  } else {
+    P_(1, ty, 8, 6, shirt); P_(1, ty + 5, 8, 1, shirtD);
+    const aL = walkL ? 1 : 0, aR = walkR ? 1 : 0;
+    P_(0, ty + aL, 1, 4, shirtD); P_(9, ty + aR, 1, 4, shirtD);
+    P_(0, ty + 4 + aL, 1, 1, skin); P_(9, ty + 4 + aR, 1, 1, skin);
+    if (d === 'down') { P_(4, ty, 2, 1, shirtD); }
+  }
+  // head
+  const hy = 1 + bob;
+  P_(1, hy + 1, 8, 7, skin);
+  if (d === 'up') {
+    P_(1, hy, 8, 8, hair); P_(2, hy - 1, 6, 1, hair);
+  } else if (d === 'left') {
+    P_(1, hy, 8, 3, hair); P_(2, hy - 1, 6, 1, hair); P_(5, hy + 3, 4, 4, hair);
+    P_(2, hy + 4, 1, 1, '#2a1a12');
+    if (mood === 'sad') { P_(2, hy + 6, 2, 1, '#9a5a4a'); P_(1, hy + 5, 1, 1, '#7fc6ff'); }
+    else if (mood === 'happy') P_(2, hy + 6, 2, 1, '#b8504a');
+  } else {
+    P_(1, hy, 8, 3, hair); P_(2, hy - 1, 6, 1, hair); P_(1, hy + 3, 1, 2, hair); P_(8, hy + 3, 1, 2, hair);
+    P_(3, hy + 4, 1, 2, '#2a1a12'); P_(6, hy + 4, 1, 2, '#2a1a12');
+    if (mood === 'sad') { P_(4, hy + 7, 2, 1, '#9a5a4a'); P_(2, hy + 3, 2, 1, hair); P_(6, hy + 3, 2, 1, hair); P_(2, hy + 6, 1, 1, '#7fc6ff'); }
+    else if (mood === 'happy') { P_(3, hy + 6, 4, 1, '#b8504a'); P_(4, hy + 7, 2, 1, '#b8504a'); }
+    else P_(4, hy + 6, 2, 1, '#c98a72');
+  }
+  // hair styles / hats
+  if (style === 'straw') { P_(-1, hy + 1, 12, 1, '#d9b24a'); P_(1, hy - 2, 8, 3, '#e8c45a'); P_(1, hy, 8, 1, '#b8483a'); }
+  if (style === 'cap') { P_(1, hy - 1, 8, 3, look.capColor || '#3a6fd0'); if (d === 'down') P_(2, hy + 2, 6, 1, '#2b58a8'); if (d === 'left') P_(-1, hy + 1, 3, 1, '#2b58a8'); }
+  if (style === 'bun') { P_(3, hy - 3, 4, 3, hair); }
+  if (style === 'long' && d !== 'up') { P_(0, hy + 2, 1, 6, hair); P_(9, hy + 2, 1, 6, hair); }
+  if (style === 'tophat') { P_(1, hy, 8, 1, '#1a1a22'); P_(2, hy - 6, 6, 6, '#22222c'); P_(2, hy - 2, 6, 1, '#b8463a'); }
+  if (look.mustache && d !== 'up') { if (d === 'left') P_(1, hy + 5, 3, 1, '#eeeeee'); else P_(2, hy + 5, 6, 1, '#eeeeee'); }
+  if (pose === 'lie') { /* rotated below */ }
+
+  // 1px dark outline around the silhouette
+  const img = g.getImageData(0, 0, 16, 24), a = img.data, out = new Uint8ClampedArray(a);
+  for (let y = 0; y < 24; y++) for (let x = 0; x < 16; x++) {
+    const i = (y * 16 + x) * 4;
+    if (a[i + 3]) continue;
+    const nb = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => { const xx = x + dx, yy = y + dy; return xx >= 0 && yy >= 0 && xx < 16 && yy < 24 && a[(yy * 16 + xx) * 4 + 3]; });
+    if (nb) { out[i] = 42; out[i + 1] = 26; out[i + 2] = 16; out[i + 3] = 230; }
+  }
+  img.data.set(out); g.putImageData(img, 0, 0);
+  if (flip || pose === 'lie') {
+    const c2 = document.createElement('canvas');
+    if (pose === 'lie') { c2.width = 24; c2.height = 16; const g2 = c2.getContext('2d'); g2.translate(0, 16); g2.rotate(-Math.PI / 2); g2.drawImage(c, 0, 0); }
+    else { c2.width = 16; c2.height = 24; const g2 = c2.getContext('2d'); g2.translate(16, 0); g2.scale(-1, 1); g2.drawImage(c, 0, 0); }
+    c = c2;
+  }
+  spriteCache.set(key, c);
+  return c;
+}
+
+/* ---------------------------------------------------------- emote bubbles */
+function drawBubble(ctx, x, y, icon, t) {
+  const bx = Math.round(x - 6), by = Math.round(y - 13 + Math.sin(t * 4) * 0.8);
+  R(ctx, bx, by, 13, 11, '#2a1a10'); R(ctx, bx + 1, by + 1, 11, 9, '#fffaf0'); R(ctx, bx + 5, by + 11, 3, 1, '#2a1a10'); px(ctx, bx + 6, by + 12, '#2a1a10'); R(ctx, bx + 5, by + 10, 3, 1, '#fffaf0');
+  const cx = bx + 6, cy = by + 5;
+  switch (icon) {
+    case '!': R(ctx, cx, cy - 3, 1, 4, '#e2443a'); px(ctx, cx, cy + 2, '#e2443a'); break;
+    case '?': drawText(ctx, '?', cx - 1, cy - 2, '#3a6fd0', F3); break;
+    case 'Z': drawText(ctx, 'Z', cx - 1, cy - 2, '#5a5aa0', F3); break;
+    case 'heart': R(ctx, cx - 3, cy - 2, 2, 2, '#e2443a'); R(ctx, cx + 1, cy - 2, 2, 2, '#e2443a'); R(ctx, cx - 3, cy - 1, 6, 2, '#e2443a'); R(ctx, cx - 2, cy + 1, 4, 1, '#e2443a'); px(ctx, cx - 1, cy + 2, '#e2443a'); px(ctx, cx - 2, cy - 2, '#ff9a90'); break;
+    case 'coin': disc(ctx, cx, cy, 3, P.goldD); disc(ctx, cx, cy, 2, P.gold); px(ctx, cx - 1, cy - 1, P.goldL); break;
+    case 'rain': R(ctx, cx - 3, cy - 2, 7, 3, '#8a93a6'); R(ctx, cx - 2, cy - 3, 4, 1, '#8a93a6'); px(ctx, cx - 2, cy + 2, '#5aa0e6'); px(ctx, cx + 1, cy + 3, '#5aa0e6'); px(ctx, cx + 3, cy + 2, '#5aa0e6'); break;
+    case 'up': R(ctx, cx, cy - 2, 1, 5, '#2b6cb0'); R(ctx, cx - 1, cy - 1, 3, 1, '#2b6cb0'); R(ctx, cx - 2, cy, 5, 1, '#2b6cb0'); break;
+    case 'down': R(ctx, cx, cy - 2, 1, 5, '#c0392b'); R(ctx, cx - 1, cy + 1, 3, 1, '#c0392b'); R(ctx, cx - 2, cy, 5, 1, '#c0392b'); break;
+    case 'chart': R(ctx, cx - 3, cy + 2, 7, 1, '#6a5a4a'); px(ctx, cx - 3, cy + 1, '#2b6cb0'); px(ctx, cx - 2, cy, '#2b6cb0'); px(ctx, cx - 1, cy + 1, '#2b6cb0'); px(ctx, cx, cy - 1, '#2b6cb0'); px(ctx, cx + 1, cy - 2, '#2b6cb0'); px(ctx, cx + 2, cy - 1, '#2b6cb0'); px(ctx, cx + 3, cy - 3, '#2b6cb0'); break;
+    case 'stop': R(ctx, cx - 2, cy - 3, 5, 7, '#d23c32'); R(ctx, cx - 3, cy - 2, 7, 5, '#d23c32'); R(ctx, cx - 1, cy, 3, 1, '#fff'); break;
+    case 'check': px(ctx, cx - 3, cy, '#1f9e5a'); px(ctx, cx - 2, cy + 1, '#1f9e5a'); px(ctx, cx - 1, cy + 2, '#1f9e5a'); px(ctx, cx, cy + 1, '#1f9e5a'); px(ctx, cx + 1, cy, '#1f9e5a'); px(ctx, cx + 2, cy - 1, '#1f9e5a'); px(ctx, cx + 3, cy - 2, '#1f9e5a'); break;
+    case 'scroll': R(ctx, cx - 3, cy - 3, 7, 7, '#f1e2bd'); R(ctx, cx - 3, cy - 3, 7, 1, '#c9a46a'); R(ctx, cx - 3, cy + 3, 7, 1, '#c9a46a'); R(ctx, cx - 2, cy - 1, 5, 1, '#8a6a45'); R(ctx, cx - 2, cy + 1, 4, 1, '#8a6a45'); break;
+    case 'seed': R(ctx, cx, cy - 1, 1, 4, '#3e9038'); R(ctx, cx - 2, cy - 2, 2, 2, '#5cb246'); R(ctx, cx + 1, cy - 3, 2, 2, '#5cb246'); break;
+    default: drawText(ctx, icon, cx - 1, cy - 2, '#3a2414', F3);
+  }
+}
+
+/* ---------------------------------------------------------- particles & floating text */
+function spawnCoins(x, y, n = 8, opts = {}) {
+  for (let i = 0; i < n; i++) Game.particles.push({ k: 'coin', x, y, vx: (Math.random() - 0.5) * (opts.spread || 60), vy: -40 - Math.random() * 50, g: 160, life: 1.1 + Math.random() * 0.5, t: 0, floor: y + 4 + Math.random() * 6 });
+}
+function spawnArcCoins(x0, y0, x1, y1, n = 10) {
+  for (let i = 0; i < n; i++) Game.particles.push({ k: 'arc', x0, y0, x1, y1, d: i * 0.08, t: 0, life: 1.2, h: 40 + Math.random() * 16 });
+}
+function spawnSparkle(x, y, col = P.goldL) { for (let i = 0; i < 5; i++) Game.particles.push({ k: 'spark', x: x + (Math.random() - 0.5) * 12, y: y + (Math.random() - 0.5) * 10, vx: 0, vy: -10, life: 0.6 + Math.random() * 0.4, t: 0, col }); }
+function spawnChips(x, y) { for (let i = 0; i < 4; i++) Game.particles.push({ k: 'chip', x, y, vx: (Math.random() - 0.5) * 50, vy: -30 - Math.random() * 30, g: 140, life: 0.6, t: 0, floor: y + 6 }); }
+function spawnDrops(x, y) { for (let i = 0; i < 2; i++) Game.particles.push({ k: 'drop', x: x + Math.random() * 3, y, vx: 0, vy: 20 + Math.random() * 10, g: 60, life: 0.4, t: 0, floor: y + 8 }); }
+function spawnSmoke(x, y) { Game.particles.push({ k: 'smoke', x, y, vx: 4 + Math.random() * 3, vy: -10 - Math.random() * 4, life: 2.6, t: 0, r: 1 }); }
+function floatText(text, x, y, color, big = false) { Game.floats.push({ text, x, y, color, t: 0, life: big ? 2.6 : 2.0 }); }
+
+function updateParticles(dt) {
+  for (const p of Game.particles) {
+    p.t += dt;
+    if (p.k === 'arc') continue;
+    p.vy += (p.g || 0) * dt; p.x += p.vx * dt; p.y += p.vy * dt;
+    if (p.floor != null && p.y > p.floor) { p.y = p.floor; p.vy *= -0.35; p.vx *= 0.6; }
+    if (p.k === 'smoke') p.r = 1 + p.t * 1.6;
+  }
+  Game.particles = Game.particles.filter(p => p.t < p.life + (p.d || 0));
+  for (const f of Game.floats) { f.t += dt; }
+  Game.floats = Game.floats.filter(f => f.t < f.life);
+}
+function drawParticles(ctx, night) {
+  for (const p of Game.particles) {
+    const a = 1 - Math.max(0, p.t - (p.d || 0)) / p.life;
+    if (p.k === 'smoke') { ctx.globalAlpha = Math.max(0, a * (night ? 0.25 : 0.5)); disc(ctx, Math.round(p.x), Math.round(p.y), Math.round(p.r), '#e8e8ea'); ctx.globalAlpha = 1; continue; }
+    if (p.k === 'arc') {
+      const tt = clamp((p.t - p.d) / p.life, 0, 1); if (tt <= 0 || tt >= 1) continue;
+      const x = lerp(p.x0, p.x1, tt), y = lerp(p.y0, p.y1, tt) - Math.sin(tt * Math.PI) * p.h;
+      R(ctx, Math.round(x) - 1, Math.round(y) - 1, 3, 3, P.goldD); px(ctx, Math.round(x) - 1, Math.round(y) - 1, P.goldL); continue;
+    }
+    ctx.globalAlpha = clamp(a * 1.5, 0, 1);
+    if (p.k === 'coin') { const x = Math.round(p.x), y = Math.round(p.y); const spin = Math.floor(p.t * 10) % 3; R(ctx, x - (spin === 1 ? 0 : 1), y - 1, spin === 1 ? 1 : 3, 3, P.goldD); px(ctx, x, y - 1, P.goldL); }
+    else if (p.k === 'spark') { const x = Math.round(p.x), y = Math.round(p.y); px(ctx, x, y, p.col); px(ctx, x - 1, y, p.col); px(ctx, x + 1, y, p.col); px(ctx, x, y - 1, p.col); px(ctx, x, y + 1, p.col); }
+    else if (p.k === 'chip') R(ctx, Math.round(p.x), Math.round(p.y), 2, 1, P.woodL);
+    else if (p.k === 'drop') R(ctx, Math.round(p.x), Math.round(p.y), 1, 2, '#7cc0f2');
+    ctx.globalAlpha = 1;
+  }
+}
+function drawFloats(ctx) {
+  for (const f of Game.floats) {
+    const k = f.t / f.life;
+    ctx.globalAlpha = k > 0.75 ? (1 - k) / 0.25 : 1;
+    const w = textWidth(f.text);
+    drawTextOutlined(ctx, f.text, Math.round(f.x - w / 2), Math.round(f.y - 6 - k * 18), f.color, '#2a1a10');
+    ctx.globalAlpha = 1;
+  }
+}
+
+/* ---------------------------------------------------------- base actor: walking + awaitable timers */
+class Actor {
+  constructor(x, y) { this.x = x; this.y = y; this.dir = 'down'; this.frame = 0; this.anim = 0; this.goal = null; this.waiters = []; this.token = 0; this.pose = 'stand'; this.hidden = false; this.emote = null; this.speed = 34; }
+  walk(points, speedMul = 1) { return new Promise(res => { this.goal = { pts: points.slice(), speed: this.speed * speedMul, res }; }); }
+  go(tx, ty, speedMul = 1, direct = false) {
+    if (dist(this.x, this.y, tx, ty) < 1.5) return Promise.resolve(true);
+    return this.walk(direct ? [{ x: tx, y: ty }] : route(this.x, this.y, tx, ty), speedMul);
+  }
+  sleep(sec) { return new Promise(res => this.waiters.push({ t: Game.time + sec, res })); }
+  interrupt() {
+    this.token++;
+    if (this.goal) { const r = this.goal.res; this.goal = null; r(ABORT); }
+    const ws = this.waiters; this.waiters = []; ws.forEach(w => w.res(ABORT));
+  }
+  async step(p, tok) { const r = await p; if (r === ABORT || tok !== this.token) throw ABORT; return r; }
+  say(icon, sec = 2) { this.emote = { icon, until: Game.time + sec }; }
+  update(dt) {
+    for (let i = this.waiters.length - 1; i >= 0; i--) if (Game.time >= this.waiters[i].t) { const w = this.waiters.splice(i, 1)[0]; w.res(true); }
+    if (this.goal) {
+      const g = this.goal, tgt = g.pts[0];
+      const dx = tgt.x - this.x, dy = tgt.y - this.y, d = Math.hypot(dx, dy), stepLen = g.speed * dt;
+      if (d <= stepLen) { this.x = tgt.x; this.y = tgt.y; g.pts.shift(); if (!g.pts.length) { this.goal = null; this.pose = this.pose === 'walk' ? 'stand' : this.pose; g.res(true); } }
+      else { this.x += dx / d * stepLen; this.y += dy / d * stepLen; this.dir = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'); this.pose = 'walk'; }
+      this.anim += dt * (g.speed / 34) * 8; this.frame = Math.floor(this.anim) % 4;
+    } else if (this.pose === 'walk') this.pose = 'stand';
+    if (this.emote && Game.time > this.emote.until) this.emote = null;
+  }
+}
+
+/* ---------------------------------------------------------- villagers: one per bot x symbol */
+class Villager extends Actor {
+  constructor(bot, sym) {
+    const house = houseFor(sym);
+    super(house.spots.door.x, house.spots.door.y);
+    this.bot = bot; this.sym = sym; this.id = bot + ':' + sym; this.house = house;
+    const h = hashStr(this.id), bi = botIndex(bot);
+    const look = SYMBOL_LOOK[sym] || { style: STYLES[h % STYLES.length], hair: h % HAIRS.length };
+    this.look = { id: this.id, skin: SKINS[(h >> 4) % SKINS.length], hair: HAIRS[look.hair], style: look.style, shirt: BOT_COLORS[bi % BOT_COLORS.length][0], shirtD: BOT_COLORS[bi % BOT_COLORS.length][1], pants: PANTS[(h >> 8) % PANTS.length], capColor: '#3a6fd0' };
+    this.lane = ((h % 5) - 2) * 3;
+    this.position = null; this.tasks = []; this.busy = false; this.mood = 'idle'; this.activity = 'Waking up'; this.carry = false; this.tool = null;
+    this.speed = 46 + (h % 8);
+    this.dayPnl = 0; this.trades = 0;
+    this.x += this.lane;
+    this.run();
+  }
+  get spot() { return this.house.spots; }
+  desired() {
+    const st = Data.botState(this.bot);
+    if (st.halted) return 'inside';
+    if (st.stale) return 'lying';
+    if (this.position) return 'market';
+    return 'home';
+  }
+  stallSpot() {
+    const i = this.house.stall;
+    const base = i >= 0 ? World.stalls[i] : World.marketExtraSpots[hashStr(this.sym) % World.marketExtraSpots.length];
+    const bots = [...Game.villagers.values()].filter(v => v.sym === this.sym).map(v => v.bot).sort();
+    const k = bots.indexOf(this.bot);
+    return { x: base.x + (k > 0 ? (k % 2 ? 12 : -12) * Math.ceil(k / 2) : 0), y: base.y + (k > 0 ? 3 : 0) };
+  }
+  homeSpot() { return { x: this.spot.door.x + this.lane, y: this.spot.door.y + 2 }; }
+  near(p, r = 4) { return dist(this.x, this.y, p.x, p.y) <= r; }
+  queue(task) { this.tasks.push(task); if (!this.busy) this.interrupt(); }
+  wake() { if (!this.busy && this.desired() !== this.lastWant) this.interrupt(); }  // only when the plan changes
+
+  async run() {
+    for (;;) {
+      const tok = this.token;
+      try {
+        if (this.tasks.length) {
+          const task = this.tasks.shift();
+          this.busy = true;
+          const st = Data.botState(this.bot);
+          const quick = this.tasks.length >= 2 || document.hidden || st.halted || st.stale;
+          await task(tok, quick);
+        } else {
+          await this.settle(tok);
+        }
+      } catch (e) { if (e !== ABORT) { console.error(e); await new Promise(r => setTimeout(r, 500)); } }
+      this.busy = false; this.tool = null;
+      if (this.pose === 'sit' || this.pose === 'lie' && this.desired() !== 'lying') this.pose = 'stand';
+    }
+  }
+
+  async settle(tok) {
+    const want = this.desired();
+    this.lastWant = want;
+    const teleport = Game.time < Game.calmUntil;  // page load / reconnect: snap into place instead of parading
+    if (want !== 'lying' && this.pose === 'lie') this.pose = 'stand';
+    if (want === 'inside') {
+      this.mood = 'idle';
+      if (!this.hidden) {
+        this.activity = 'Heading inside';
+        if (teleport) { const h = this.homeSpot(); this.x = h.x; this.y = h.y; } else await this.step(this.go(this.spot.door.x, this.spot.door.y), tok);
+        this.hidden = true;
+      }
+      this.activity = 'Inside (halted)';
+      await this.step(this.sleep(1), tok); return;
+    }
+    if (this.hidden) { this.hidden = false; this.x = this.spot.door.x; this.y = this.spot.door.y; this.dir = 'down'; await this.step(this.sleep(0.3), tok); }
+    if (want === 'lying') {
+      const h = this.homeSpot();
+      if (!this.near(h)) { this.activity = 'Wandering home'; if (teleport) { this.x = h.x; this.y = h.y; } else await this.step(this.go(h.x, h.y), tok); }
+      this.pose = 'lie'; this.activity = 'Napping (bot not reporting)'; this.mood = 'idle';
+      this.say('?', 3); await this.step(this.sleep(3), tok); return;
+    }
+    if (want === 'market') {
+      const s = this.stallSpot();
+      if (!this.near(s)) {
+        this.activity = `Off to market (${this.position.side})`; this.mood = 'idle';
+        if (teleport) { this.x = s.x; this.y = s.y; } else await this.step(this.go(s.x, s.y), tok);
+        this.say('!', 1.5);
+      }
+      this.dir = 'up'; this.activity = `At market · ${this.position.side} ×${this.position.qty}`; this.mood = 'idle';
+      await this.step(this.sleep(2 + Math.random() * 3), tok);
+      if (Math.random() < 0.35) this.say('chart', 1.8);
+      else if (Math.random() < 0.3) { this.dir = Math.random() < 0.5 ? 'left' : 'right'; await this.step(this.sleep(1), tok); this.dir = 'up'; }
+      return;
+    }
+    // home + idle routine
+    const h = this.homeSpot();
+    if (!this.near(h, 10)) {
+      this.activity = 'Walking home';
+      if (teleport) { this.x = h.x; this.y = h.y; } else await this.step(this.go(h.x, h.y), tok);
+    }
+    this.mood = this.mood === 'sad' && Math.random() < 0.6 ? 'sad' : 'idle';
+    const r = Math.random();
+    if (r < 0.32) { this.activity = 'Hanging out by the door'; this.dir = pick(Math.random, ['down', 'left', 'right', 'down']); await this.step(this.sleep(3 + Math.random() * 5), tok); return; }
+    if (r < 0.55) { // chop wood
+      const w = this.spot.wood; this.activity = 'Chopping wood';
+      await this.step(this.go(w.x, w.y, 1, true), tok);
+      this.dir = 'left'; this.tool = 'axe';
+      for (let i = 0; i < 6; i++) { this.toolPhase = 0; await this.step(this.sleep(0.35), tok); this.toolPhase = 1; spawnChips(this.x - 8, this.y - 4); await this.step(this.sleep(0.35), tok); }
+      this.tool = null; await this.step(this.go(h.x, h.y, 1, true), tok); return;
+    }
+    if (r < 0.78 && this.spot.crops) { // water the crops behind the house
+      this.activity = 'Watering crops';
+      const pts = [this.spot.side, this.spot.sideBack, this.spot.crops].map(p => ({ x: p.x, y: p.y }));
+      await this.step(this.walk(pts), tok);
+      this.dir = 'up'; this.tool = 'can';
+      for (let i = 0; i < 8; i++) { spawnDrops(this.x + 5, this.y - 8); await this.step(this.sleep(0.4), tok); if (i === 3) { this.x -= 10; } }
+      this.tool = null;
+      await this.step(this.walk([this.spot.sideBack, this.spot.side, h].map(p => ({ x: p.x, y: p.y }))), tok); return;
+    }
+    // sit on the bench
+    const b = this.spot.bench; this.activity = 'Resting on the bench';
+    await this.step(this.go(b.x, b.y - 2, 1, true), tok);
+    this.pose = 'sit'; this.dir = 'down';
+    await this.step(this.sleep(5 + Math.random() * 6), tok);
+    this.pose = 'stand'; await this.step(this.go(h.x, h.y, 1, true), tok);
+  }
+
+  /* --- event-driven tasks ------------------------------------------------ */
+  onOpen(ev, live) {
+    this.position = { side: ev.side, qty: ev.qty, price: ev.price, since: ev.timestamp };
+    if (live) this.wake();
+  }
+  onClose(ev, live) {
+    this.position = null;
+    const pnl = Number(ev.pnl) || 0;
+    this.dayPnl += pnl; this.trades++;
+    if (!live) { this.mood = pnl > 0 ? 'happy' : pnl < 0 ? 'sad' : 'idle'; return; }
+    if (pnl > 0) this.queue((tok, quick) => this.deliverCoins(tok, quick, pnl));
+    else this.queue((tok, quick) => this.sadWalk(tok, quick, pnl));
+  }
+  async deliverCoins(tok, quick, pnl) {
+    const s = this.stallSpot(), door = World.buildings.profit.door;
+    if (quick) { floatText(money(pnl, true, false), door.x, door.y - 20, P.goldL); spawnCoins(door.x, door.y - 6, 6); Game.goldToday += pnl; return; }
+    if (this.hidden) { this.hidden = false; this.x = this.spot.door.x; this.y = this.spot.door.y; }
+    this.activity = 'Collecting profits';
+    if (!this.near(s, 20)) await this.step(this.go(s.x, s.y, 1.3), tok);
+    this.dir = 'up'; spawnCoins(this.x, this.y - 18, 6, { spread: 30 });
+    this.mood = 'happy'; this.say('coin', 1.2);
+    floatText(money(pnl, true, false), this.x, this.y - 22, P.goldL);
+    await this.step(this.sleep(0.9), tok);
+    this.carry = true; this.activity = 'Hauling coins to the Profit Room';
+    await this.step(this.go(door.x + this.lane, door.y), tok);
+    this.dir = 'up';
+    await this.step(this.sleep(0.2), tok);
+    this.hidden = true; this.carry = false;
+    spawnCoins(door.x, door.y - 8, 12); spawnSparkle(door.x + 34, door.y - 6);
+    Game.goldToday += pnl;
+    floatText('+' + moneyTiny(pnl, false), door.x, door.y - 26, P.goldL, true);
+    await this.step(this.sleep(1.0), tok);
+    this.hidden = false; this.dir = 'down'; this.say('heart', 2);
+    this.activity = 'Heading home, pockets lighter';
+  }
+  async sadWalk(tok, quick, pnl) {
+    const s = this.stallSpot();
+    if (quick) { floatText(money(pnl, true, false), this.x, this.y - 22, '#ff9a8a'); this.mood = 'sad'; return; }
+    if (this.hidden) { this.hidden = false; this.x = this.spot.door.x; this.y = this.spot.door.y; }
+    if (!this.near(s, 20)) await this.step(this.go(s.x, s.y, 1.3), tok);
+    this.mood = 'sad'; this.dir = 'down'; this.say('rain', 2.5);
+    floatText(money(pnl, true, false), this.x, this.y - 22, '#ff9a8a');
+    this.activity = 'Trudging home after a loss';
+    await this.step(this.sleep(1.2), tok);
+    const h = this.homeSpot();
+    await this.step(this.go(h.x, h.y, 0.55), tok);
+    this.dir = 'down'; await this.step(this.sleep(2.5), tok);
+  }
+
+  draw(ctx) {
+    if (this.hidden) return;
+    const x = Math.round(this.x), y = Math.round(this.y);
+    if (this.pose === 'lie') {
+      shadowEllipse(ctx, x, y + 1, 10, 2);
+      ctx.drawImage(personSprite(this.look, 'down', 0, 'lie', this.mood), x - 12, y - 12);
+    } else {
+      shadowEllipse(ctx, x, y + 1, 5, 2);
+      const spr = personSprite(this.look, this.dir, this.pose === 'walk' ? this.frame : 0, this.pose === 'walk' ? 'walk' : this.pose, this.mood);
+      ctx.drawImage(spr, x - 8, y - 21 + (this.pose === 'sit' ? 2 : 0));
+      if (this.carry) { const by = y - 26 + (this.frame % 2); disc(ctx, x, by, 4, P.goldDD); disc(ctx, x, by, 3, '#d9a440'); R(ctx, x - 1, by - 5, 3, 2, '#b07a2a'); drawText(ctx, '$', x - 1, by - 2, P.goldL, F3); }
+      if (this.tool === 'axe') {
+        if (this.toolPhase === 0) { R(ctx, x - 2, y - 26, 1, 10, P.woodD); R(ctx, x - 5, y - 27, 4, 3, '#b8bec6'); }
+        else { R(ctx, x - 11, y - 12, 8, 1, P.woodD); R(ctx, x - 13, y - 13, 3, 4, '#b8bec6'); }
+      }
+      if (this.tool === 'can') { R(ctx, x + 3, y - 12, 6, 4, '#7a8a9a'); R(ctx, x + 8, y - 13, 3, 1, '#7a8a9a'); px(ctx, x + 4, y - 12, '#a8b8c8'); }
+    }
+  }
+  drawTag(ctx) {
+    if (this.hidden) return;
+    const x = Math.round(this.x), y = Math.round(this.y);
+    const tag = this.sym;
+    const tw = textWidth(tag, F3);
+    const ty = y - (this.pose === 'lie' ? 18 : 31) - (this.look.style === 'straw' || this.look.style === 'bun' ? 1 : 0) - (this.carry ? 8 : 0);
+    if (!this.emote) {
+      R(ctx, x - Math.ceil(tw / 2) - 2, ty - 1, tw + 4, 7, 'rgba(30,20,12,0.72)');
+      drawText(ctx, tag, x - Math.ceil(tw / 2), ty, '#fffaf0', F3);
+      if (Game.villagers.size > 3) px(ctx, x + Math.ceil(tw / 2) + 3, ty + 2, this.look.shirt);
+    }
+    if (this.emote) drawBubble(ctx, x, ty + 6, this.emote.icon, Game.time);
+  }
+}
+
+function botIndex(bot) {
+  const order = Data.botOrder;
+  let i = order.indexOf(bot);
+  if (i < 0) { order.push(bot); i = order.length - 1; }
+  return i;
+}
+function villagerFor(bot, sym) {
+  sym = String(sym || '').toUpperCase();
+  if (!sym) return null;
+  const id = bot + ':' + sym;
+  let v = Game.villagers.get(id);
+  if (!v) { v = new Villager(bot, sym); Game.villagers.set(id, v); UI.dirty = true; }
+  return v;
+}
+
+/* ---------------------------------------------------------- the Mayor */
+class Mayor extends Actor {
+  constructor() {
+    const d = World.buildings.mayor.door;
+    super(d.x + 10, d.y + 2);
+    this.look = { id: 'mayor', skin: '#f2c7a0', hair: '#c8c8cc', style: 'tophat', shirt: '#5b3f8f', shirtD: '#43306b', pants: '#2c2340', mustache: true };
+    this.tasks = []; this.busy = false; this.speed = 44; this.activity = 'Reading the ledger';
+    this.run();
+  }
+  queue(task) { this.tasks.push(task); if (!this.busy) this.interrupt(); }
+  async run() {
+    for (;;) {
+      const tok = this.token;
+      try {
+        if (this.tasks.length) { this.busy = true; const t = this.tasks.shift(); await t(tok, this.tasks.length >= 3 || document.hidden); }
+        else await this.idle(tok);
+      } catch (e) { if (e !== ABORT) { console.error(e); await new Promise(r => setTimeout(r, 500)); } }
+      this.busy = false;
+    }
+  }
+  async idle(tok) {
+    const d = World.buildings.mayor.door;
+    if (this.hidden) { this.hidden = false; this.x = d.x; this.y = d.y; }
+    const r = Math.random();
+    if (r < 0.4) { this.activity = 'Checking the notice board'; await this.step(this.go(166, 150, 1, true), tok); this.dir = 'up'; await this.step(this.sleep(4 + Math.random() * 4), tok); }
+    else if (r < 0.7) { this.activity = 'Pacing outside the office'; await this.step(this.go(d.x - 12 + Math.random() * 30, d.y + 4, 1, true), tok); this.dir = 'down'; await this.step(this.sleep(3 + Math.random() * 3), tok); }
+    else { this.activity = 'Doing paperwork inside'; await this.step(this.go(d.x, d.y, 1, true), tok); this.hidden = true; await this.step(this.sleep(6 + Math.random() * 6), tok); this.hidden = false; }
+  }
+  decide(ev) {
+    this.queue(async (tok, quick) => {
+      const target = decisionTarget(ev);
+      const icon = { move_to_reserve: 'coin', halt_bot: 'stop', resume_bot: 'check', increase_allocation: 'up', decrease_allocation: 'down', withdrawal_suggested: '!', withdraw: 'coin', allocate: 'seed' }[ev.action] || 'scroll';
+      const label = decisionLabel(ev);
+      if (quick) { floatText(label, target.x, target.y - 24, '#fff4c0'); return; }
+      const d = World.buildings.mayor.door;
+      if (this.hidden) { this.hidden = false; this.x = d.x; this.y = d.y; }
+      this.activity = 'Announcing: ' + ev.rule.replace(/_/g, ' ');
+      this.say('scroll', 1.5); await this.step(this.sleep(0.8), tok);
+      await this.step(this.go(target.x, target.y, 1.4), tok);
+      this.dir = 'up'; this.say(icon, 3);
+      floatText(label, target.x, target.y - 26, '#fff4c0', true);
+      if (ev.action === 'move_to_reserve' || ev.action === 'withdraw') { const pd = World.buildings.profit.door; const s = World.buildings.silo.door; spawnArcCoins(pd.x + 30, pd.y - 8, s.x, s.y - 40, 12); }
+      if (ev.action === 'withdrawal_suggested') spawnSparkle(target.x, target.y - 40);
+      await this.step(this.sleep(3), tok);
+      this.activity = 'Walking back to the office';
+      await this.step(this.go(d.x + 10, d.y + 2), tok);
+    });
+  }
+  draw(ctx) {
+    if (this.hidden) return;
+    const x = Math.round(this.x), y = Math.round(this.y);
+    shadowEllipse(ctx, x, y + 1, 5, 2);
+    ctx.drawImage(personSprite(this.look, this.dir, this.pose === 'walk' ? this.frame : 0, this.pose === 'walk' ? 'walk' : 'stand', 'idle'), x - 8, y - 21);
+  }
+  drawTag(ctx) {
+    if (this.hidden) return;
+    const x = Math.round(this.x), y = Math.round(this.y);
+    if (this.emote) drawBubble(ctx, x, y - 26, this.emote.icon, Game.time);
+    else { const tw = textWidth('MAYOR', F3); R(ctx, x - Math.ceil(tw / 2) - 2, y - 33, tw + 4, 7, 'rgba(60,30,80,0.8)'); drawText(ctx, 'MAYOR', x - Math.ceil(tw / 2), y - 32, '#fff4c0', F3); }
+  }
+}
+function decisionTarget(ev) {
+  const silo = World.buildings.silo.door;
+  if (ev.action === 'move_to_reserve' || ev.action === 'withdrawal_suggested' || ev.action === 'withdraw' || !ev.bot_id) return { x: silo.x - 10, y: silo.y + 4 };
+  const vs = [...Game.villagers.values()].filter(v => v.bot === ev.bot_id);
+  const h = vs.length ? vs[0].house : Object.values(World.houses)[0];
+  return { x: h.spots.door.x + 16, y: h.spots.door.y + 6 };
+}
+function decisionLabel(ev) {
+  const a = Number(ev.amount) || 0;
+  switch (ev.action) {
+    case 'move_to_reserve': return a ? `${moneyTiny(a, false)} TO SILO` : 'SWEEP';
+    case 'halt_bot': return 'HALT!';
+    case 'resume_bot': return 'BACK TO WORK';
+    case 'increase_allocation': return `+${moneyTiny(a, false)} ALLOC`;
+    case 'decrease_allocation': return `-${moneyTiny(a, false)} ALLOC`;
+    case 'withdrawal_suggested': return 'WITHDRAW?';
+    case 'withdraw': return `-${moneyTiny(a, false)} OUT`;
+    case 'allocate': return `${moneyTiny(a, false)} PLANTED`;
+    default: return ev.rule ? ev.rule.toUpperCase().replace(/_/g, ' ').slice(0, 18) : 'DECREE';
+  }
+}
+
+/* ---------------------------------------------------------- ducks & bugs */
+class Duck {
+  constructor(x, y) { this.x = x; this.y = y; this.tx = x; this.ty = y; this.t = Math.random() * 5; this.dir = 1; }
+  update(dt) {
+    this.t += dt;
+    const d = dist(this.x, this.y, this.tx, this.ty);
+    if (d < 1) { for (let i = 0; i < 20; i++) { const x = 30 + Math.random() * 150, y = 220 + Math.random() * 90; if (inPond(x + 8, y) && inPond(x - 8, y) && inPond(x, y + 6) && inPond(x, y - 6)) { this.tx = x; this.ty = y; break; } } }
+    else { const s = 6 * dt; this.x += (this.tx - this.x) / d * s; this.y += (this.ty - this.y) / d * s; this.dir = this.tx > this.x ? 1 : -1; }
+  }
+  draw(ctx) {
+    const x = Math.round(this.x), y = Math.round(this.y + Math.sin(this.t * 2) * 0.6), f = this.dir;
+    R(ctx, x - 4, y + 2, 9, 1, '#9fd4f8');
+    R(ctx, x - 3, y - 1, 7, 3, '#fbfbf6'); px(ctx, x - 3 * f, y - 2, '#fbfbf6');
+    R(ctx, x + 2 * f - (f < 0 ? 1 : 0), y - 4, 2, 3, '#fbfbf6'); px(ctx, x + 3 * f, y - 3, '#f0a020'); px(ctx, x + 2 * f, y - 3, '#222');
+    px(ctx, x - f, y, '#d8d8cc');
+  }
+}
+function updateBugs(dt, night) {
+  const want = night ? 14 : 5;
+  while (Game.bugs.length < want) Game.bugs.push({ x: Math.random() * WORLD_W, y: 190 + Math.random() * 280, vx: 0, vy: 0, t: Math.random() * 10, col: pick(Math.random, ['#fff', '#ffd6e8', '#fff3a0', '#c8e6ff']) });
+  if (Game.bugs.length > want) Game.bugs.length = want;
+  for (const b of Game.bugs) { b.t += dt; b.vx += (Math.random() - 0.5) * 40 * dt; b.vy += (Math.random() - 0.5) * 40 * dt; b.vx = clamp(b.vx, -12, 12); b.vy = clamp(b.vy, -8, 8); b.x = (b.x + b.vx * dt + WORLD_W) % WORLD_W; b.y = clamp(b.y + b.vy * dt, 170, 500); }
+}
+function drawBugs(ctx, night) {
+  for (const b of Game.bugs) {
+    const x = Math.round(b.x), y = Math.round(b.y);
+    if (night) { const a = 0.5 + 0.5 * Math.sin(b.t * 3); ctx.globalAlpha = a; px(ctx, x, y, '#fff6a0'); ctx.globalAlpha = a * 0.35; R(ctx, x - 1, y - 1, 3, 3, '#ffe86a'); ctx.globalAlpha = 1; }
+    else { const flap = Math.floor(b.t * 8) % 2; px(ctx, x, y, '#3a2a1a'); px(ctx, x - 1, y - flap, b.col); px(ctx, x + 1, y - flap, b.col); }
+  }
+}
+
+/* ============================================================== data: live feed, treasury, local trade history */
+const Data = {
+  trades: [],                 // persisted trade events (open + close), oldest first
+  storedKeys: new Set(),      // keys already persisted
+  appliedKeys: new Set(),     // keys already applied to the world this page-load
+  decisions: [], decisionKeys: new Set(),
+  statuses: {},               // bot -> latest status (+ _rx local receive time)
+  haltOverride: {},           // bot -> bool, from decisions until the next status
+  treasury: null,
+  botNames: {},
+  botOrder: [],
+  roster: {},                 // bot -> [symbols] seen, persisted so villagers survive reloads
+  session: null,
+  conn: 'connecting',
+  lastClose: {},              // bot:sym -> ms of last close (for status reconciliation)
+
+  botState(bot) {
+    const s = this.statuses[bot];
+    const tr = this.treasury?.allocations?.[bot];
+    const halted = bot in this.haltOverride ? this.haltOverride[bot] : s ? !!s.halted : !!tr?.halted;
+    let stale = false;
+    if (s && this.conn === 'live') { stale = !!s.stale || (Date.now() - s._rx > 6 * 60 * 1000); }
+    return { halted, stale };
+  },
+  botName(bot) { return this.botNames[bot] || this.treasury?.allocations?.[bot]?.bot_name || bot; },
+  bots() {
+    const set = new Set([...this.botOrder, ...Object.keys(this.treasury?.allocations || {}), ...Object.keys(this.statuses), ...Object.keys(this.roster)]);
+    return [...set];
+  },
+};
+
+function tradeKey(e) { return ['t', e.bot_id, e.timestamp, e.symbol, e.action, e.qty, e.price, e.pnl ?? ''].join('|'); }
+function decisionKey(e) { return ['d', e.timestamp, e.rule, e.bot_id ?? '', e.action, e.amount].join('|'); }
+
+/* ---------------------------------------------------------- persistence */
+function loadLocal() {
+  const saved = store.get(STORE_PREFIX + 'trades', []);
+  const cutoff = addDays(etDay(), -120);
+  Data.trades = (Array.isArray(saved) ? saved : []).filter(t => t && t.timestamp && (dayOfTs(t.timestamp) || '') >= cutoff);
+  for (const t of Data.trades) Data.storedKeys.add(tradeKey(t));
+  Data.roster = store.get(STORE_PREFIX + 'roster', {}) || {};
+  World.lotAssign = store.get(STORE_PREFIX + 'lots', {}) || {};
+  Data.botNames = store.get(STORE_PREFIX + 'names', {}) || {};
+}
+let _saveTimer = null;
+function saveLocalSoon() {
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => {
+    if (Data.trades.length > 8000) Data.trades = Data.trades.slice(-8000);
+    const ok = store.set(STORE_PREFIX + 'trades', Data.trades);
+    if (!ok && Data.trades.length > 2000) { Data.trades = Data.trades.slice(-2000); store.set(STORE_PREFIX + 'trades', Data.trades); }
+    store.set(STORE_PREFIX + 'roster', Data.roster);
+    store.set(STORE_PREFIX + 'names', Data.botNames);
+  }, 800);
+}
+function rememberRoster(bot, sym) {
+  const list = Data.roster[bot] || (Data.roster[bot] = []);
+  if (!list.includes(sym)) { list.push(sym); saveLocalSoon(); }
+}
+
+/* ---------------------------------------------------------- event dispatch */
+function dispatch(ev, live) {
+  if (!ev || typeof ev !== 'object') return;
   try {
-    const r = await fetch('state.json', { cache: 'no-store' });
-    if (!r.ok) throw new Error('http ' + r.status);
-    const st = await r.json();
-    applyState(st, false);
-    try { localStorage.setItem('farmv1', JSON.stringify({ at: Date.now(), state: st })); } catch(_) {}
-  } catch (e) { onFeedDown(); }
+    if (ev.type === 'trade') onTrade(ev, live);
+    else if (ev.type === 'status') onStatus(ev, live);
+    else if (ev.type === 'decision') onDecision(ev, live);
+  } catch (e) { console.error('event failed', ev, e); }
 }
-function onFeedDown() {
-  let cached = null;
-  try { cached = JSON.parse(localStorage.getItem('farmv1')); } catch(_) {}
-  if (cached && cached.state) {
-    applyState(cached.state, true);
-  } else {
-    setConn(false);
-    document.getElementById('nodata').style.display = 'block';
-    showFeedBanner('FEED DOWN — no state.json found and no cached snapshot. The farm has not reported in.');
+
+function onTrade(ev, live) {
+  if (!ev.bot_id || !ev.symbol) return;
+  const key = tradeKey(ev);
+  if (!Data.storedKeys.has(key)) {
+    Data.storedKeys.add(key);
+    const { replay, ...clean } = ev;
+    Data.trades.push(clean);
+    if (Data.trades.length > 1 && Data.trades[Data.trades.length - 2].timestamp > clean.timestamp) Data.trades.sort((a, b) => a.timestamp < b.timestamp ? -1 : 1);
+    saveLocalSoon();
+  }
+  if (Data.appliedKeys.has(key)) return;
+  Data.appliedKeys.add(key);
+  if (ev.bot_name) Data.botNames[ev.bot_id] = ev.bot_name;
+  const sym = String(ev.symbol).toUpperCase();
+  rememberRoster(ev.bot_id, sym);
+  const today = dayOfTs(ev.timestamp) === etDay();
+  const v = villagerFor(ev.bot_id, sym);
+  if (ev.action === 'open') {
+    if (today) v.onOpen(ev, live);
+  } else if (ev.action === 'close') {
+    Data.lastClose[ev.bot_id + ':' + sym] = Date.now();
+    if (today) {
+      if (!live && ev.pnl > 0) Game.goldToday += Number(ev.pnl);
+      v.onClose(ev, live);
+    }
+  }
+  if (live) UI.flash(ev);
+  UI.dirty = true;
+}
+
+function onStatus(ev, live) {
+  const bot = ev.bot_id;
+  if (!bot) return;
+  const prev = Data.statuses[bot];
+  if (prev && prev.timestamp > ev.timestamp && !live) return;
+  Data.statuses[bot] = { ...ev, _rx: Date.now() };
+  delete Data.haltOverride[bot];
+  if (ev.session) Data.session = ev.session;
+  // reconcile villagers with the bot's reported positions (with grace periods so a
+  // slightly older state.json can't yank someone off the market mid-trade)
+  const now = Date.now(), held = new Set();
+  for (const p of ev.positions || []) {
+    const sym = String(p.symbol || '').toUpperCase(); if (!sym) continue;
+    held.add(sym); rememberRoster(bot, sym);
+    const v = villagerFor(bot, sym);
+    const closedRecently = now - (Data.lastClose[bot + ':' + sym] || 0) < 90000;
+    if (!v.position && !closedRecently) { v.position = { side: p.side, qty: p.qty, since: null, _t: now }; v.wake(); }
+  }
+  for (const v of Game.villagers.values()) {
+    if (v.bot !== bot || !v.position || held.has(v.sym)) continue;
+    const since = parseTs(v.position.since)?.getTime() || v.position._t || 0;
+    if (now - since > 90000) { v.position = null; v.wake(); }
+  }
+  for (const v of Game.villagers.values()) if (v.bot === bot) v.wake();
+  UI.dirty = true;
+}
+
+function onDecision(ev, live) {
+  const key = decisionKey(ev);
+  if (Data.decisionKeys.has(key)) return;
+  Data.decisionKeys.add(key);
+  Data.decisions.push(ev);
+  Data.decisions.sort((a, b) => a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0);
+  if (Data.decisions.length > 300) Data.decisions = Data.decisions.slice(-300);
+  if (ev.bot_id && (ev.action === 'halt_bot' || ev.action === 'resume_bot')) {
+    if (live || dayOfTs(ev.timestamp) === etDay()) {
+      Data.haltOverride[ev.bot_id] = ev.action === 'halt_bot';
+      for (const v of Game.villagers.values()) if (v.bot === ev.bot_id) v.wake();
+    }
+  }
+  if (live && Game.mayor) Game.mayor.decide(ev);
+  if (live) { refreshTreasurySoon(); UI.toast(decisionLabel(ev), ev.reason); }
+  UI.dirty = true;
+}
+
+/* ---------------------------------------------------------- treasury */
+let _trTimer = null;
+function refreshTreasurySoon(ms = 1500) { clearTimeout(_trTimer); _trTimer = setTimeout(fetchTreasury, ms); }
+async function fetchTreasury() {
+  if (DEMO) { Demo.treasury(); return; }
+  try {
+    const r = await fetch('api/treasury', { credentials: 'same-origin', cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    applyTreasury(await r.json());
+  } catch (e) { console.warn('treasury fetch failed', e); }
+}
+function applyTreasury(tr) {
+  Data.treasury = tr;
+  for (const [bot, a] of Object.entries(tr.allocations || {})) {
+    if (!Data.botOrder.includes(bot)) Data.botOrder.push(bot);
+    if (a.bot_name) Data.botNames[bot] = a.bot_name;
+  }
+  for (const d of tr.decisions || []) onDecision(d, false);
+  ensureVillagers();
+  UI.dirty = true;
+}
+/* everyone known gets a villager; a bot we know nothing about yet gets the three default houses */
+function ensureVillagers() {
+  for (const bot of Data.bots()) {
+    const syms = Data.roster[bot]?.length ? Data.roster[bot] : ['SPY', 'QQQ', 'IWM'];
+    for (const s of syms) villagerFor(bot, s);
   }
 }
-function showFeedBanner(msg) {
-  const b = document.getElementById('feedbanner');
-  b.textContent = msg; b.style.display = 'block';
-}
-function hideFeedBanner() { document.getElementById('feedbanner').style.display = 'none'; }
 
-function applyState(st, isCached) {
-  document.getElementById('nodata').style.display = 'none';
-  const updatedAt = st.updated_at ? new Date(st.updated_at) : null;
-  const ageMin = updatedAt ? (Date.now() - updatedAt.getTime()) / 60000 : null;
-  const tooOld = ageMin === null || ageMin > OFFLINE_AFTER_MIN;
-  S.lastOk = updatedAt;
-  S.staleView = isCached || tooOld;
-  setConn(!S.staleView);
+/* ---------------------------------------------------------- WebSocket with backoff */
+const Feed = {
+  ws: null, backoff: 1000, timer: null,
+  connect() {
+    if (DEMO) { Demo.start(); return; }
+    clearTimeout(this.timer);
+    const u = new URL('ws', location.href); u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'; u.search = ''; u.hash = '';
+    const url = u.href;
+    let ws;
+    try { ws = new WebSocket(url); } catch (e) { this.retry(); return; }
+    this.ws = ws; Data.conn = 'connecting'; UI.dirty = true;
+    ws.onopen = () => { Data.conn = 'live'; Game.calmUntil = Game.time + 3; this.backoff = 1000; fetchTreasury(); UI.dirty = true; };
+    ws.onmessage = (m) => { let ev; try { ev = JSON.parse(m.data); } catch (e) { return; } dispatch(ev, !ev.replay); };
+    ws.onclose = () => { if (this.ws !== ws) return; Data.conn = 'offline'; UI.dirty = true; this.retry(); };
+    ws.onerror = () => { };
+  },
+  retry() { clearTimeout(this.timer); this.timer = setTimeout(() => this.connect(), this.backoff); this.backoff = Math.min(this.backoff * 2, 30000); },
+};
 
-  if (S.staleView) {
-    const when = updatedAt ? updatedAt.toLocaleString() : 'unknown';
-    showFeedBanner('⚠️ FEED DOWN — showing last known state from ' + when +
-      '. Numbers below are NOT live. Check the farm writer / droplet runner.');
-  } else hideFeedBanner();
-
-  // feed panel
-  const f = st.feed || {};
-  document.getElementById('f-source').textContent = f.source || '—';
-  document.getElementById('f-age').textContent = ageMin === null ? '—' : ageMin < 1 ? '<1 min' : ageMin.toFixed(0) + ' min';
-  const lag = f.data_lag_min;
-  const lagEl = document.getElementById('f-lag');
-  lagEl.textContent = (lag === null || lag === undefined) ? '—' : lag.toFixed(1) + ' min';
-  lagEl.className = (lag !== null && lag !== undefined && lag > 30) ? 'neg' : '';
-  const sess = (st.session && st.session.state) || '—';
-  document.getElementById('f-session').textContent = sess;
-  document.getElementById('f-flatten').textContent = (st.session && st.session.flatten_et) || '15:45';
-  S.session = sess;
-  const badges = [];
-  if (f.stale) badges.push('<span class="stale-badge">STALE FEED</span>');
-  if (tooOld) badges.push('<span class="stale-badge">DATA OLD</span>');
-  document.getElementById('f-badges').innerHTML = badges.join(' ');
-
-  // treasury
-  const t = st.treasury || {};
-  S.treasury = t;
-  document.getElementById('t-total').textContent = fmtN(t.total);
-  document.getElementById('t-reserve').textContent = fmtN(t.reserve);
-  document.getElementById('tr-reserve').textContent = fmtN(t.reserve);
-  document.getElementById('tr-withdrawn').textContent = fmtN(t.withdrawn);
-  const allocs = t.allocations || {};
-  const ids = Object.keys(allocs);
-  document.getElementById('tr-bots').textContent = ids.length || (st.farmers || []).length || '—';
-  let daySum = 0, swept = 0;
-  (st.farmers || []).forEach(x => { daySum += (x.day_pnl || 0); });
-  if (!st.farmers && ids.length) ids.forEach(id => { daySum += (allocs[id].day_pnl || 0); });
-  const de = document.getElementById('t-daypnl');
-  de.textContent = (daySum >= 0 ? '+' : '') + fmtN(daySum);
-  de.className = daySum >= 0 ? 'pos' : 'neg';
-
-  // treasurer limits
-  const lim = st.limits || {};
-  const pt = lim.profit_target !== undefined ? lim.profit_target : 500;
-  const ds = lim.daily_stop !== undefined ? lim.daily_stop : -1000;
-  document.getElementById('l-profit').textContent = (daySum >= 0 ? '+' : '') + fmtN(daySum) + ' / +' + fmtN(pt);
-  document.getElementById('l-profit-bar').style.width = Math.min(100, Math.max(0, daySum / pt * 100)) + '%';
-  document.getElementById('l-loss').textContent = (daySum >= 0 ? '+' : '') + fmtN(daySum) + ' / ' + fmtN(ds);
-  document.getElementById('l-loss-bar').style.width = Math.min(100, Math.max(0, daySum / ds * 100)) + '%';
-  document.getElementById('l-swept').textContent = fmtN(lim.profit_swept_today);
-
-  // red switch
-  const rs = st.red_switch || {};
-  const rState = document.getElementById('r-state');
-  const rb = document.getElementById('redbanner');
-  if (rs.tripped) {
-    rState.innerHTML = '<span class="halted-badge">TRIPPED</span>';
-    document.getElementById('r-reason').textContent = (rs.reason || 'unknown') +
-      (rs.tripped_at ? ' @ ' + String(rs.tripped_at).slice(11, 16) : '');
-    rb.style.display = 'block';
-    rb.textContent = '🚨 RED SWITCH TRIPPED — ' + (rs.reason || 'unknown reason') +
-      '. All trading frozen. A human must clear this.';
-  } else {
-    rState.innerHTML = '<span class="pos">ARMED</span>';
-    document.getElementById('r-reason').textContent = '—';
-    rb.style.display = 'none';
+/* ---------------------------------------------------------- stats for the Profit Room */
+function closesOn(day) { return Data.trades.filter(t => t.action === 'close' && dayOfTs(t.timestamp) === day); }
+/* per-day {pnl, trades, wins} preferring the Mayor's settled history (server-side, any device),
+   falling back to trades this browser has seen */
+function dailyBook() {
+  const book = {};                          // day -> {pnl, trades, wins, src}
+  const histBots = {};                      // day -> Set(bot) covered by server history
+  for (const [bot, a] of Object.entries(Data.treasury?.allocations || {})) {
+    for (const h of a.history || []) {
+      const b = book[h.date] || (book[h.date] = { pnl: 0, trades: 0, wins: 0, winsKnown: true });
+      b.pnl += h.pnl; b.trades += h.trades || 0;
+      if (h.wins == null) b.winsKnown = false; else b.wins += h.wins;
+      (histBots[h.date] || (histBots[h.date] = new Set())).add(bot);
+    }
   }
-
-  // farmers
-  (st.farmers || []).forEach(ev => onFarmer(ev));
-  renderBots();
-
-  // decisions
-  const dl = document.getElementById('decision-list');
-  dl.innerHTML = '';
-  const decs = st.decisions || [];
-  if (!decs.length) dl.innerHTML = '<div class="small">no decisions yet</div>';
-  decs.slice().reverse().forEach(d => addDecision(d));
-}
-
-function setConn(live) {
-  S.connected = live;
-  const el = document.getElementById('conn');
-  el.className = live ? 'live' : 'dead';
-  el.textContent = live ? 'LIVE' : 'OFFLINE';
-}
-
-// ===== Farmers =====
-function getBot(id, name) {
-  if (!S.bots[id]) {
-    S.bots[id] = { id, name: name || id, color: BOT_COLORS[colorIdx++ % BOT_COLORS.length],
-      x: 100 + Math.random()*760, y: 400 + Math.random()*180, tx: null, ty: null,
-      carrying: 0, mood: 'idle', day_pnl: 0, halted: false, positions: [], session: 'closed' };
+  for (const t of Data.trades) {
+    if (t.action !== 'close') continue;
+    const day = dayOfTs(t.timestamp);
+    if (histBots[day]?.has(t.bot_id)) continue;
+    const b = book[day] || (book[day] = { pnl: 0, trades: 0, wins: 0, winsKnown: true });
+    b.pnl += Number(t.pnl) || 0; b.trades += 1; if (Number(t.pnl) > 0) b.wins += 1;
   }
-  return S.bots[id];
-}
-function onFarmer(ev) {
-  const b = getBot(ev.bot_id, ev.bot_name);
-  const prevPnl = b.day_pnl;
-  b.day_pnl = ev.day_pnl || 0;
-  b.halted = !!ev.halted;
-  b.positions = ev.positions || [];
-  if (ev.session) { b.session = ev.session; S.session = ev.session; }
-  if (b.halted) b.mood = 'sad';
-  else if (ev.stale_data) b.mood = 'sleeping';
-  else if (b.day_pnl > prevPnl && b.day_pnl > 0) { b.mood = 'happy'; b.carrying = Math.max(1, Math.round(b.day_pnl/100)); }
-  else if (b.day_pnl < 0) b.mood = 'sad';
-  else if (b.positions.length) b.mood = 'working';
-  else b.mood = 'idle';
+  return book;
 }
 
-// ===== UI rendering =====
-function fmtN(n) {
-  if (n === null || n === undefined) return '—';
-  const s = n < 0 ? '-' : '';
-  return s + '$' + Math.abs(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
+/* ============================================================== HTML UI: top bar, sidebar, panels, charts */
+const $ = (s, el = document) => el.querySelector(s);
+const SESSION_LABEL = { pre: 'Pre-market', open: 'Market open', 'no-entries': 'No new entries', flatten: 'Flattening', closed: 'Market closed' };
+
+function currentSession() {
+  if (SESSION_OVERRIDE) return SESSION_OVERRIDE;
+  if (Data.session) {
+    // trust the bot unless its status is old news
+    const latest = Object.values(Data.statuses).sort((a, b) => b._rx - a._rx)[0];
+    if (latest && Date.now() - latest._rx < 10 * 60 * 1000) return Data.session;
+  }
+  const day = etDay(), m = etMinutes();
+  if (!isWeekday(day)) return 'closed';
+  if (m < 4 * 60) return 'closed';
+  if (m < 9 * 60 + 30) return 'pre';
+  if (m < 15 * 60 + 45) return 'open';
+  if (m < 16 * 60) return 'flatten';
+  return 'closed';
 }
-function renderBots() {
-  const el = document.getElementById('bot-list');
-  el.innerHTML = '';
-  const bots = Object.values(S.bots);
-  if (!bots.length) { el.innerHTML = '<div class="small">waiting for data…</div>'; return; }
-  bots.forEach(b => {
-    const d = document.createElement('div');
-    d.className = 'bot-card';
-    const pnlCls = b.day_pnl >= 0 ? 'pos' : 'neg';
-    const posHtml = b.positions.length
-      ? b.positions.map(p => `<div class="brow"><span>${p.symbol||'?'} ${p.side||''}</span><span>${p.qty||''}x</span></div>`).join('')
-      : '<div class="brow"><span>Positions:</span><span>flat</span></div>';
-    d.innerHTML = `<div class="bname" style="color:${b.color}">● ${b.name}</div>
-      <div class="brow"><span>Day P&amp;L:</span><span class="${pnlCls}">${b.day_pnl >= 0 ? '+' : ''}${fmtN(b.day_pnl)}</span></div>
-      ${posHtml}
-      <div class="brow"><span>Data lag:</span><span>${b.data_lag !== undefined && b.data_lag !== null ? b.data_lag + 'm' : '—'}</span></div>
-      ${b.halted ? '<div class="brow"><span class="halted-badge">HALTED</span></div>' : ''}`;
-    el.appendChild(d);
+
+function dayPnlTotal() {
+  let sum = 0, any = false;
+  for (const bot of Data.bots()) {
+    const s = Data.statuses[bot];
+    if (s && dayOfTs(s.timestamp) === etDay()) { sum += Number(s.day_pnl) || 0; any = true; }
+    else {
+      const a = Data.treasury?.allocations?.[bot];
+      if (a && a.day === etDay()) { sum += Number(a.day_pnl_gross ?? a.day_pnl) || 0; any = true; }
+    }
+  }
+  if (!any) for (const t of closesOn(etDay())) sum += Number(t.pnl) || 0;
+  return sum;
+}
+
+const UI = {
+  dirty: true, modal: null, ticker: [],
+  init() {
+    $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') this.close(); });
+    $('#modal-close').addEventListener('click', () => this.close());
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') this.close(); });
+    $('#tabs').addEventListener('click', e => { const b = e.target.closest('button[data-tab]'); if (b) this.open(this.modal.kind, this.modal.arg, b.dataset.tab); });
+    $('#places').addEventListener('click', e => { const b = e.target.closest('button[data-place]'); if (b) this.openPlace(b.dataset.place); });
+    $('#villagers').addEventListener('click', e => { const c = e.target.closest('[data-house]'); if (c) this.openPlace('house:' + c.dataset.house); });
+    const tip = $('#chart-tip');
+    document.addEventListener('pointerover', e => { const b = e.target.closest('[data-tip]'); if (!b) { tip.hidden = true; return; } tip.innerHTML = b.dataset.tip; tip.hidden = false; const r = b.getBoundingClientRect(); tip.style.left = Math.min(window.innerWidth - 190, Math.max(6, r.left + r.width / 2 - 90)) + 'px'; tip.style.top = (r.top - 8) + 'px'; });
+    setInterval(() => { if (this.dirty) { this.dirty = false; this.render(); } this.renderClock(); }, 250);
+  },
+  render() {
+    this.renderTop(); this.renderPlaces(); this.renderSide();
+    if (this.modal && !this.modal.static) this.open(this.modal.kind, this.modal.arg, this.modal.tab, true);
+  },
+  renderTop() {
+    const tr = Data.treasury;
+    $('#st-total').textContent = tr ? money(tr.total, false, false) : '—';
+    $('#st-reserve').textContent = tr ? money(tr.reserve, false, false) : '—';
+    const d = dayPnlTotal();
+    $('#st-day').innerHTML = pnlHtml(d);
+    const live = $('#live');
+    const state = DEMO ? 'demo' : Data.conn;
+    live.className = 'live ' + state;
+    live.textContent = { live: 'LIVE', connecting: 'CONNECTING', offline: 'RECONNECTING', demo: 'DEMO' }[state];
+    live.title = state === 'offline' ? 'Lost the live feed - retrying with backoff' : state === 'demo' ? 'Simulated trades (no server)' : '';
+  },
+  renderClock() {
+    const s = currentSession();
+    const last = this.ticker[this.ticker.length - 1];
+    const html = `<b>${esc(new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))}</b><span>${esc(SESSION_LABEL[s] || s)}</span>` +
+      (last && Date.now() - last.at < 60000 ? `<em class="${last.cls}">${esc(last.text)}</em>` : '');
+    if ($('#clock').innerHTML !== html) $('#clock').innerHTML = html;
+  },
+  flash(ev) {
+    const sym = String(ev.symbol).toUpperCase();
+    const text = ev.action === 'open' ? `${sym} ${ev.side} ×${ev.qty} opened` : `${sym} closed ${money(ev.pnl, true, false)}`;
+    this.ticker.push({ text, at: Date.now(), cls: ev.action === 'open' ? '' : pnlClass(ev.pnl) });
+    if (this.ticker.length > 10) this.ticker.shift();
+  },
+  toast(title, body) {
+    const el = document.createElement('div'); el.className = 'toast';
+    el.innerHTML = `<b>${esc(title)}</b><span>${esc(body || '')}</span>`;
+    $('#toasts').appendChild(el);
+    setTimeout(() => el.classList.add('out'), 5200); setTimeout(() => el.remove(), 6000);
+  },
+  renderPlaces() {
+    const houses = [...new Set(Object.values(World.houses))];
+    const btns = [['profit', '💰 Profit Room'], ['mayor', "📜 Mayor's Office"], ['market', '🛒 Markets'], ['silo', '🌾 Silo']]
+      .concat(houses.map(h => ['house:' + h.sym, '🏠 ' + h.label.replace(' HOUSE', '') + ' House']));
+    const html = btns.map(([k, l]) => `<button data-place="${esc(k)}">${esc(l)}</button>`).join('');
+    if ($('#places').dataset.html !== html) { $('#places').innerHTML = html; $('#places').dataset.html = html; }
+  },
+  renderSide() {
+    const tr = Data.treasury;
+    $('#tr-reserve').textContent = tr ? money(tr.reserve, false, false) : '—';
+    $('#tr-avail').textContent = tr ? money(tr.reserve_available ?? tr.reserve, false, false) : '—';
+    $('#tr-withdrawn').textContent = tr ? money(tr.withdrawn, false, false) : '—';
+    $('#tr-bots').textContent = Data.bots().length;
+    // villagers grouped by bot
+    let html = '';
+    for (const bot of Data.bots()) {
+      const st = Data.botState(bot), s = Data.statuses[bot], a = tr?.allocations?.[bot];
+      const vs = [...Game.villagers.values()].filter(v => v.bot === bot);
+      const color = BOT_COLORS[botIndex(bot) % BOT_COLORS.length][0];
+      const day = s && dayOfTs(s.timestamp) === etDay() ? s.day_pnl : a?.day === etDay() ? (a.day_pnl_gross ?? a.day_pnl) : 0;
+      const badge = st.halted ? '<span class="badge halt">HALTED</span>' : st.stale ? '<span class="badge stale">NOT REPORTING</span>' : '';
+      html += `<div class="bot"><div class="bot-h"><i class="dot" style="background:${color}"></i><b>${esc(Data.botName(bot))}</b>${badge}<span class="r">${pnlHtml(day)}</span></div>`;
+      html += `<div class="bot-sub">streak ${a ? (a.streak > 0 ? '+' : '') + a.streak : '—'} · positions ${s?.positions?.length ?? vs.filter(v => v.position).length}${s?.data_lag_min != null ? ` · data lag ${s.data_lag_min}m` : ''}</div>`;
+      for (const v of vs.sort((p, q) => p.sym < q.sym ? -1 : 1)) {
+        const mood = v.hidden ? (Data.botState(v.bot).halted ? 'sleeping' : 'indoors') : v.pose === 'lie' ? 'confused' : v.mood === 'idle' ? (v.position ? 'trading' : 'content') : v.mood;
+        html += `<button class="vil" data-house="${esc(v.sym)}"><span class="sym">${esc(v.sym)}</span><span class="act">${esc(v.activity)}</span><span class="mood">${esc(mood)}</span><span class="r">${v.trades ? pnlHtml(v.dayPnl, false) : ''}</span></button>`;
+      }
+      html += '</div>';
+    }
+    $('#villagers').innerHTML = html || '<p class="muted">Waiting for the first report…</p>';
+    // ledger, newest first
+    const ds = Data.decisions.slice(-60).reverse();
+    $('#ledger').innerHTML = ds.length ? ds.map(d => `<div class="led"><div class="led-h"><span>${esc(fmtWhen(d.timestamp))}</span> · <span>${esc(String(d.rule).replace(/_/g, ' '))}</span>${d.bot_id ? ` · <span>${esc(Data.botName(d.bot_id))}</span>` : ''}</div><div class="led-b">${esc(d.reason)}</div>${Number(d.amount) ? `<div class="led-a">Amount: ${money(d.amount, false, false)}</div>` : ''}</div>`).join('') : '<p class="muted">No decisions yet.</p>';
+  },
+
+  /* ------------------------------------------------------------ panels */
+  openPlace(id) {
+    if (id === 'profit') return this.open('profit', null, 'today');
+    if (id === 'mayor' || id === 'silo') return this.open('mayor', null);
+    if (id === 'market') return this.open('market', null);
+    if (id.startsWith('house:')) return this.open('house', id.slice(6));
+  },
+  open(kind, arg, tab, refresh = false) {
+    const m = $('#modal');
+    const scroll = refresh ? $('#modal-body').scrollTop : 0;
+    this.modal = { kind, arg, tab };
+    let title = '', tabs = [], body = '';
+    if (kind === 'profit') { title = 'Profit Room'; tabs = [['today', 'Today'], ['week', 'Week'], ['month', 'Month'], ['proj', 'Projections']]; body = profitPanel(tab || 'today'); }
+    if (kind === 'house') { const h = World.houses[arg]; title = h ? h.label.replace('HOUSE', 'House') : arg; body = housePanel(arg); }
+    if (kind === 'mayor') { title = "Mayor's Office"; body = mayorPanel(); }
+    if (kind === 'market') { title = 'Markets'; body = marketPanel(); }
+    $('#modal-title').textContent = title;
+    $('#tabs').innerHTML = tabs.map(([k, l]) => `<button data-tab="${k}" class="${(tab || tabs[0][0]) === k ? 'on' : ''}" role="tab" aria-selected="${(tab || tabs[0][0]) === k}">${l}</button>`).join('');
+    $('#tabs').hidden = !tabs.length;
+    $('#modal-body').innerHTML = body;
+    if (m.hidden) { m.hidden = false; $('#modal-close').focus(); }
+    $('#modal-body').scrollTop = scroll;
+  },
+  close() { $('#modal').hidden = true; this.modal = null; $('#chart-tip').hidden = true; },
+};
+
+/* ------------------------------------------------------------ chart: diverging columns (gain blue, loss red) */
+function columns(items, opts = {}) {
+  const vals = items.map(i => i.value || 0);
+  const maxP = Math.max(0, ...vals), maxN = Math.max(0, ...vals.map(v => -v));
+  const span = (maxP + maxN) || 1;
+  const H = opts.height || 150, base = Math.round(H * maxP / span);
+  const best = vals.length ? vals.indexOf(Math.max(...vals)) : -1, worst = vals.length ? vals.indexOf(Math.min(...vals)) : -1;
+  const cols = items.map((it, i) => {
+    const v = it.value || 0, h = Math.max(it.empty ? 0 : 2, Math.round(Math.abs(v) / span * H));
+    const label = (i === best && v > 0) || (i === worst && v < 0) ? `<span class="vl ${v >= 0 ? 'up' : 'dn'}" style="${v >= 0 ? `bottom:${H - base + h + 3}px` : `top:${base + h + 3}px`}">${moneyShort(v)}</span>` : '';
+    const tip = `<b>${esc(it.label)}${it.sub ? ' · ' + esc(it.sub) : ''}</b><br>${it.empty ? 'no trades' : esc(money(v, true)) + (it.detail ? '<br>' + esc(it.detail) : '')}`;
+    return `<div class="col" data-tip="${esc(tip)}" tabindex="0" aria-label="${esc(it.label)}: ${it.empty ? 'no trades' : esc(money(v, true))}">
+      ${it.empty ? '' : `<div class="bar ${v >= 0 ? 'up' : 'dn'}" style="${v >= 0 ? `bottom:${H - base}px` : `top:${base}px`};height:${h}px"></div>`}${label}
+      <span class="xl">${esc(it.label)}</span></div>`;
+  }).join('');
+  return `<div class="chart" style="height:${H + 26}px"><div class="plot" style="height:${H}px"><div class="zero" style="top:${base}px"></div>${cols}</div></div>`;
+}
+function tile(label, value, sub = '') { return `<div class="tile"><span>${esc(label)}</span><b>${value}</b>${sub ? `<em>${sub}</em>` : ''}</div>`; }
+
+/* ------------------------------------------------------------ Profit Room */
+function profitPanel(tab) {
+  const today = etDay(), book = dailyBook();
+  if (tab === 'today') {
+    const tr = Data.trades.filter(t => dayOfTs(t.timestamp) === today);
+    const closes = tr.filter(t => t.action === 'close');
+    const pnl = closes.reduce((s, t) => s + (Number(t.pnl) || 0), 0);
+    const wins = closes.filter(t => t.pnl > 0).length;
+    const best = closes.reduce((b, t) => (b == null || t.pnl > b.pnl) ? t : b, null);
+    const worst = closes.reduce((b, t) => (b == null || t.pnl < b.pnl) ? t : b, null);
+    const multi = new Set(tr.map(t => t.bot_id)).size > 1;
+    const rows = tr.slice().reverse().map(t => `<tr><td>${esc(fmtTime(t.timestamp))}</td>${multi ? `<td>${esc(Data.botName(t.bot_id))}</td>` : ''}<td><b>${esc(t.symbol)}</b></td><td>${esc(t.side)}</td><td>${esc(t.action)}</td><td class="n">${esc(t.qty)}</td><td class="n">${t.price != null ? '$' + Number(t.price).toFixed(2) : ''}</td><td class="n">${t.action === 'close' ? pnlHtml(t.pnl) : '<span class="muted">open</span>'}</td></tr>`).join('');
+    const reported = Data.bots().reduce((s, b) => { const st = Data.statuses[b]; return st && dayOfTs(st.timestamp) === today ? s + (Number(st.day_pnl) || 0) : s; }, 0);
+    const hasReport = Data.bots().some(b => Data.statuses[b] && dayOfTs(Data.statuses[b].timestamp) === today);
+    const pnlSub = hasReport && Math.abs(reported - pnl) > 1 ? `bot reports ${money(reported, true, false)}` : `${closes.length} closed trades`;
+    return `<div class="tiles">${tile('Day P&L', pnlHtml(pnl), esc(pnlSub))}${tile('Trades', closes.length, `${tr.length - closes.length} opens`)}${tile('Win rate', pct(wins, closes.length), `${wins} of ${closes.length}`)}${tile('Best', best ? pnlHtml(best.pnl, false) : '—', best ? esc(best.symbol + ' ' + fmtTime(best.timestamp)) : '')}${tile('Worst', worst ? pnlHtml(worst.pnl, false) : '—', worst ? esc(worst.symbol + ' ' + fmtTime(worst.timestamp)) : '')}</div>
+      <h3>Today's trades</h3>${rows ? `<div class="tbl"><table><thead><tr><th>Time</th>${multi ? '<th>Bot</th>' : ''}<th>Sym</th><th>Side</th><th>Action</th><th class="n">Qty</th><th class="n">Price</th><th class="n">P&L</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="muted">No trades yet today.</p>'}
+      ${closes.some(t => t.pnl_estimated) ? '<p class="note">P&L is the bot\'s estimate (underlying move × delta), not option fills.</p>' : ''}`;
+  }
+  if (tab === 'week') {
+    const mon = mondayOf(today), days = [0, 1, 2, 3, 4].map(i => addDays(mon, i));
+    const items = days.map(d => { const b = book[d]; return { label: weekdayName(d), sub: shortDate(d), value: b ? b.pnl : 0, empty: !b || (!b.trades && !b.pnl), detail: b ? `${b.trades} trades${b.winsKnown && b.trades ? ` · ${pct(b.wins, b.trades)} wins` : ''}` : '' }; });
+    const tot = items.reduce((s, i) => s + i.value, 0), traded = items.filter(i => !i.empty);
+    const bestDay = traded.length ? traded.reduce((a, b) => b.value > a.value ? b : a) : null;
+    const trades = days.reduce((s, d) => s + (book[d]?.trades || 0), 0), wins = days.reduce((s, d) => s + (book[d]?.wins || 0), 0);
+    return `<div class="tiles">${tile('Week to date', pnlHtml(tot))}${tile('Best day', bestDay ? pnlHtml(bestDay.value, false) : '—', bestDay ? bestDay.label : '')}${tile('Trades', trades)}${tile('Win rate', pct(wins, trades))}</div>
+      <h3>Daily P&L · week of ${esc(shortDate(mon))}</h3>${columns(items)}
+      <div class="tbl"><table><thead><tr><th>Day</th><th class="n">Trades</th><th class="n">Wins</th><th class="n">P&L</th></tr></thead><tbody>${days.map(d => { const b = book[d]; return `<tr><td>${esc(weekdayName(d) + ' ' + shortDate(d))}</td><td class="n">${b?.trades ?? '—'}</td><td class="n">${b && b.trades ? (b.winsKnown ? b.wins : '?') : '—'}</td><td class="n">${b ? pnlHtml(b.pnl) : '—'}</td></tr>`; }).join('')}</tbody></table></div>`;
+  }
+  if (tab === 'month' || tab === 'proj') {
+    const first = today.slice(0, 8) + '01';
+    const mdays = []; for (let d = first; d.slice(0, 7) === today.slice(0, 7); d = addDays(d, 1)) mdays.push(d);
+    const past = mdays.filter(d => d <= today);
+    const mtd = past.reduce((s, d) => s + (book[d]?.pnl || 0), 0);
+    const trades = past.reduce((s, d) => s + (book[d]?.trades || 0), 0), wins = past.reduce((s, d) => s + (book[d]?.wins || 0), 0);
+    if (tab === 'month') {
+      const weeks = [];
+      for (const d of past) { const m = mondayOf(d); let w = weeks.find(x => x.mon === m); if (!w) weeks.push(w = { mon: m, pnl: 0, trades: 0, wins: 0, any: false }); const b = book[d]; if (b) { w.pnl += b.pnl; w.trades += b.trades; w.wins += b.wins; w.any = true; } }
+      const items = weeks.map((w, i) => ({ label: shortDate(w.mon < first ? first : w.mon), sub: 'week ' + (i + 1), value: w.pnl, empty: !w.any, detail: `${w.trades} trades` }));
+      // running win rate, day by day
+      let cw = 0, ct = 0; const run = past.filter(d => book[d]?.trades).map(d => { cw += book[d].wins; ct += book[d].trades; return `<tr><td>${esc(weekdayName(d) + ' ' + shortDate(d))}</td><td class="n">${book[d].trades}</td><td class="n">${pnlHtml(book[d].pnl)}</td><td class="n">${pct(cw, ct)}</td></tr>`; }).reverse().join('');
+      const monthName = new Date(today + 'T12:00:00Z').toLocaleDateString(undefined, { month: 'long', timeZone: 'UTC' });
+      return `<div class="tiles">${tile(monthName + ' to date', pnlHtml(mtd))}${tile('Trades', trades)}${tile('Running win rate', pct(wins, trades), `${wins} wins`)}${tile('Trading days', past.filter(d => book[d]?.trades).length)}</div>
+        <h3>Weekly P&L</h3>${columns(items)}
+        <h3>Day by day</h3>${run ? `<div class="tbl"><table><thead><tr><th>Day</th><th class="n">Trades</th><th class="n">P&L</th><th class="n">Running win %</th></tr></thead><tbody>${run}</tbody></table></div>` : '<p class="muted">No trading days this month yet.</p>'}
+        ${historyNote()}`;
+    }
+    // projections: naive linear extrapolation
+    const tradingDays = mdays.filter(isWeekday);
+    const elapsed = tradingDays.filter(d => d < today || (d === today && etMinutes() >= 16 * 60) || (d === today && book[d]?.trades)).length;
+    const remaining = tradingDays.length - elapsed;
+    const daily = past.filter(d => isWeekday(d) && (book[d]?.trades || d < today)).map(d => book[d]?.pnl || 0);
+    const avg = elapsed ? mtd / elapsed : 0;
+    const mean = daily.length ? daily.reduce((a, b) => a + b, 0) / daily.length : 0;
+    const sd = daily.length > 1 ? Math.sqrt(daily.reduce((s, v) => s + (v - mean) ** 2, 0) / (daily.length - 1)) : 0;
+    const proj = mtd + avg * remaining, band = sd * Math.sqrt(Math.max(remaining, 0));
+    return `<div class="tiles">${tile('Month to date', pnlHtml(mtd))}${tile('Avg per trading day', pnlHtml(avg), `${elapsed} day${elapsed === 1 ? '' : 's'} so far`)}${tile('Days left', remaining, 'weekdays, holidays not excluded')}${tile('Projected month-end', pnlHtml(proj), sd ? `rough range ${moneyShort(proj - band)} to ${moneyShort(proj + band)}` : '')}</div>
+      <div class="proj"><div class="proj-row"><span>So far</span><div class="track"><div class="fill ${mtd >= 0 ? 'up' : 'dn'}" style="width:${clamp(Math.abs(mtd) / (Math.max(Math.abs(proj), Math.abs(mtd)) || 1) * 100, 1, 100)}%"></div></div><b>${money(mtd, true, false)}</b></div>
+      <div class="proj-row"><span>At this pace</span><div class="track"><div class="fill ${proj >= 0 ? 'up' : 'dn'} ghost" style="width:${clamp(Math.abs(proj) / (Math.max(Math.abs(proj), Math.abs(mtd)) || 1) * 100, 1, 100)}%"></div></div><b>${money(proj, true, false)}</b></div></div>
+      <p class="note">Naive extrapolation: month-to-date ÷ trading days so far × days remaining. It assumes every remaining day looks like the average so far, which is not a forecast. The range is ±1 standard deviation of daily P&L scaled by √(days left).</p>${historyNote()}`;
+  }
+  return '';
+}
+function historyNote() {
+  const hasHist = Object.values(Data.treasury?.allocations || {}).some(a => Array.isArray(a.history));
+  return hasHist ? '' : '<p class="note">Past days come from trades this browser has seen. Update the backend bundle to get full history on every device.</p>';
+}
+
+/* ------------------------------------------------------------ house / bot detail */
+function housePanel(sym) {
+  const vs = [...Game.villagers.values()].filter(v => v.house === World.houses[sym]);
+  if (!vs.length) return '<p class="muted">Nobody lives here yet.</p>';
+  let html = '';
+  for (const bot of [...new Set(vs.map(v => v.bot))]) {
+    const s = Data.statuses[bot], a = Data.treasury?.allocations?.[bot], st = Data.botState(bot);
+    const day = s && dayOfTs(s.timestamp) === etDay() ? s.day_pnl : (a?.day_pnl_gross ?? 0);
+    const residents = vs.filter(v => v.bot === bot);
+    const positions = (s?.positions || []).map(p => `<li class="${String(p.symbol).toUpperCase() === sym ? 'hl' : ''}"><b>${esc(p.symbol)}</b> ${esc(p.side)} ×${esc(p.qty)}${p.occ ? ` <span class="muted">${esc(p.occ)}</span>` : ''}</li>`).join('');
+    const trades = Data.trades.filter(t => t.bot_id === bot).slice(-15).reverse();
+    html += `<section class="botcard"><h3><i class="dot" style="background:${BOT_COLORS[botIndex(bot) % BOT_COLORS.length][0]}"></i>${esc(Data.botName(bot))} ${st.halted ? '<span class="badge halt">HALTED</span>' : ''}${st.stale ? '<span class="badge stale">NOT REPORTING</span>' : ''}</h3>
+      <div class="tiles">${tile('Day P&L', pnlHtml(day))}${tile('Streak', a ? (a.streak > 0 ? '+' : '') + a.streak : '—', 'days, + green / − red')}${tile('Allocation', a ? money(a.allocated, false, false) : '—', a?.parked ? `${money(a.parked, false, false)} parked` : '')}${tile('Swept today', a ? money(a.swept_today ?? 0, false, false) : '—', 'to the silo')}</div>
+      <p class="resident">${residents.map(v => `<b>${esc(v.sym)}</b> villager: ${esc(v.activity)}`).join('<br>')}</p>
+      <h4>Open positions</h4>${positions ? `<ul class="pos">${positions}</ul>` : '<p class="muted">Flat.</p>'}
+      ${st.halted && a?.halt_reason ? `<p class="note">Halt reason: ${esc(a.halt_reason)}</p>` : ''}
+      <h4>Recent trades</h4>${trades.length ? `<div class="tbl"><table><thead><tr><th>When</th><th>Sym</th><th>Side</th><th>Action</th><th class="n">Qty</th><th class="n">Price</th><th class="n">P&L</th></tr></thead><tbody>${trades.map(t => `<tr class="${String(t.symbol).toUpperCase() === sym ? 'hl' : ''}"><td>${esc(fmtWhen(t.timestamp))}</td><td><b>${esc(t.symbol)}</b></td><td>${esc(t.side)}</td><td>${esc(t.action)}</td><td class="n">${esc(t.qty)}</td><td class="n">$${Number(t.price).toFixed(2)}</td><td class="n">${t.action === 'close' ? pnlHtml(t.pnl) : ''}</td></tr>`).join('')}</tbody></table></div>` : '<p class="muted">No trades seen yet.</p>'}
+    </section>`;
+  }
+  return html;
+}
+
+/* ------------------------------------------------------------ Mayor's office (treasury) */
+function mayorPanel() {
+  const tr = Data.treasury;
+  if (!tr) return '<p class="muted">Treasury not loaded yet.</p>';
+  const rows = Object.entries(tr.allocations || {}).map(([bot, a]) => `<tr><td>${esc(a.bot_name || bot)}${a.halted ? ' <span class="badge halt">HALTED</span>' : ''}</td><td class="n">${money(a.allocated, false, false)}</td><td class="n">${pnlHtml(a.day_pnl_gross ?? a.day_pnl)}</td><td class="n">${money(a.swept_today ?? 0, false, false)}</td><td class="n">${a.streak > 0 ? '+' : ''}${a.streak}</td></tr>`).join('');
+  const ds = Data.decisions.slice(-25).reverse().map(d => `<tr><td>${esc(fmtWhen(d.timestamp))}</td><td>${esc(String(d.rule).replace(/_/g, ' '))}</td><td>${esc(d.bot_id ? Data.botName(d.bot_id) : 'treasury')}</td><td class="n">${Number(d.amount) ? money(d.amount, false, false) : ''}</td></tr><tr class="sub"><td colspan="4">${esc(d.reason)}</td></tr>`).join('');
+  return `<div class="tiles">${tile('Treasury total', money(tr.total, false, false))}${tile('Silo (reserve)', money(tr.reserve, false, false), tr.reserve_available != null && tr.reserve_available !== tr.reserve ? `${money(tr.reserve_available, false, false)} available` : '')}${tile('Withdrawn', money(tr.withdrawn, false, false))}${tile('Paper capital in', tr.contributed != null ? money(tr.contributed, false, false) : '—')}</div>
+    <h3>Allocations</h3><div class="tbl"><table><thead><tr><th>Bot</th><th class="n">Allocated</th><th class="n">Day</th><th class="n">Swept</th><th class="n">Streak</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="note">The Mayor only moves paper allocations. Withdrawals need you: <code>mayor.py withdraw &lt;amount&gt;</code> on the server.</p>
+    <h3>Recent decisions</h3><div class="tbl"><table class="dec"><tbody>${ds || '<tr><td class="muted">None yet.</td></tr>'}</tbody></table></div>`;
+}
+
+/* ------------------------------------------------------------ markets */
+function marketPanel() {
+  const open = [...Game.villagers.values()].filter(v => v.position);
+  const last = {};
+  for (const t of Data.trades) last[String(t.symbol).toUpperCase()] = t;
+  const lastRows = Object.entries(last).sort().map(([sym, t]) => `<tr><td><b>${esc(sym)}</b></td><td>${esc(t.side)} ${esc(t.action)}</td><td class="n">$${Number(t.price).toFixed(2)}</td><td>${esc(fmtWhen(t.timestamp))}</td></tr>`).join('');
+  return `<h3>At the stalls now</h3>${open.length ? `<ul class="pos">${open.map(v => `<li><b>${esc(v.sym)}</b> ${esc(v.position.side)} ×${esc(v.position.qty)} · ${esc(Data.botName(v.bot))}${v.position.price ? ` · in at $${Number(v.position.price).toFixed(2)}` : ''}${v.position.since ? ` · ${esc(fmtTime(v.position.since))}` : ''}</li>`).join('')}</ul>` : '<p class="muted">Nobody is holding a position.</p>'}
+    <h3>Last trade per symbol</h3>${lastRows ? `<div class="tbl"><table><tbody>${lastRows}</tbody></table></div>` : '<p class="muted">No trades seen yet.</p>'}`;
+}
+
+/* ============================================================== render loop, lighting, input, demo, boot */
+const View = { canvas: null, ctx: null, k: 2, hover: null, down: null };
+Game.night = 0; Game.dusk = 0; Game.goldShown = 0; Game.calmUntil = 3; Game.day = etDay(); Game.smoke = 0;
+
+let GLOW = null;
+function glowSprite() {
+  if (GLOW) return GLOW;
+  GLOW = document.createElement('canvas'); GLOW.width = GLOW.height = 64;
+  const g = GLOW.getContext('2d'), gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(255,214,120,0.9)'); gr.addColorStop(0.4, 'rgba(255,190,90,0.35)'); gr.addColorStop(1, 'rgba(255,170,60,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+  return GLOW;
+}
+
+function resize() {
+  const wrap = $('#canvas-wrap'), c = View.canvas;
+  const narrow = window.innerWidth <= 900;
+  const availW = wrap.clientWidth - 8, availH = narrow ? Infinity : wrap.clientHeight - 8;
+  let w = availW, h = w * WORLD_H / WORLD_W;
+  if (h > availH) { h = availH; w = h * WORLD_W / WORLD_H; }
+  const dpr = window.devicePixelRatio || 1;
+  const k = clamp(Math.round(w * dpr / WORLD_W), 1, 6);
+  c.width = WORLD_W * k; c.height = WORLD_H * k;
+  c.style.width = Math.floor(w) + 'px'; c.style.height = Math.floor(h) + 'px';
+  View.k = k;
+}
+
+function sessionLight(s) { return { night: s === 'closed' ? 1 : s === 'pre' ? 0.6 : 0, dusk: s === 'flatten' || s === 'no-entries' ? 1 : s === 'pre' ? 0.4 : 0 }; }
+
+function update(dt) {
+  for (const v of Game.villagers.values()) v.update(dt);
+  Game.mayor.update(dt);
+  for (const d of Game.ducks) d.update(dt);
+  updateBugs(dt, Game.night > 0.5);
+  updateParticles(dt);
+  Game.smoke -= dt;
+  if (Game.smoke <= 0) { Game.smoke = 0.55; for (const b of Object.values(World.buildings)) for (const ch of b.chimneys) if (Math.random() < 0.55) spawnSmoke(ch.x, ch.y); }
+  const d = etDay();
+  if (d !== Game.day) { Game.day = d; Game.goldToday = 0; for (const v of Game.villagers.values()) { v.dayPnl = 0; v.trades = 0; } UI.dirty = true; }
+  const L = sessionLight(currentSession()), a = Math.min(1, dt * 1.2);
+  Game.night += (L.night - Game.night) * a; Game.dusk += (L.dusk - Game.dusk) * a;
+  Game.goldShown += (Game.goldToday - Game.goldShown) * Math.min(1, dt * 1.5);
+}
+
+function drawWater(ctx) {
+  const t = Game.time;
+  for (const w of World.water) { const s = Math.sin(t * 1.3 + w.p); if (s > 0.55) R(ctx, w.x, w.y, w.l, 1, s > 0.85 ? P.foam : P.waterL); }
+}
+
+function drawGoldPile(ctx) {
+  const g = Game.goldShown, lvl = g <= 0.5 ? 0 : g < 100 ? 1 : g < 300 ? 2 : g < 700 ? 3 : g < 1500 ? 4 : g < 3000 ? 5 : 6;
+  if (!lvl) return;
+  const cx = 420, by = 152, w = 4 + lvl * 3, h = 1 + lvl * 2;
+  shadowEllipse(ctx, cx, by + 1, w + 2, 2, 0.3);
+  for (let i = 0; i <= h; i++) { const ww = Math.round(w * (1 - (i / (h + 1)) ** 1.6)); R(ctx, cx - ww, by - i, ww * 2 + 1, 1, i === 0 ? P.goldDD : (i % 2 ? P.goldD : P.gold)); }
+  for (let i = 0; i < lvl * 3; i++) { const hx = cx - w + 2 + ((i * 7) % (w * 2 - 2)), hy = by - 1 - ((i * 5) % Math.max(1, h)); px(ctx, hx, hy, P.goldL); }
+  if (Math.sin(Game.time * 3) > 0.92) spawnSparkle(cx + (Math.random() - 0.5) * w * 2, by - h / 2);
+}
+function drawSiloGauge(ctx) {
+  const b = World.buildings.silo, gz = b.gauge; if (!gz) return;
+  const res = Number(Data.treasury?.reserve) || 0;
+  const f = clamp(Math.log10(1 + res) / Math.log10(1 + 25000), 0, 1);
+  const fh = Math.round(gz.h * f);
+  if (fh > 0) {
+    R(ctx, gz.x, gz.y + gz.h - fh, gz.w, fh, P.goldD);
+    for (let yy = gz.y + gz.h - fh; yy < gz.y + gz.h; yy += 3) for (let xx = gz.x + ((yy / 3) % 2 ? 1 : 0); xx < gz.x + gz.w; xx += 3) px(ctx, xx, yy, P.gold);
+    R(ctx, gz.x, gz.y + gz.h - fh, gz.w, 1, P.goldL);
+  }
+  const label = moneyTiny(res, false), tw = textWidth(label, F3);
+  R(ctx, b.x + b.w / 2 - tw / 2 - 2, gz.y - 9, tw + 4, 7, '#2a1a10'); drawText(ctx, label, b.x + b.w / 2 - tw / 2, gz.y - 8, P.goldL, F3);
+}
+function drawMarketBoard(ctx) {
+  const bd = World.buildings.market.board; if (!bd) return;
+  const open = [...Game.villagers.values()].filter(v => v.position).length;
+  drawText(ctx, 'OPEN ' + open, bd.x + 1, bd.y + 1, '#e8efe6', F3);
+  const d = dayPnlTotal();
+  drawText(ctx, moneyTiny(d), bd.x + 1, bd.y + 9, d > 0 ? '#a9d4ff' : d < 0 ? '#ffb4a8' : '#e8efe6', F3);
+}
+function drawHouseStates(ctx) {
+  const byHouse = new Map();
+  for (const v of Game.villagers.values()) { if (!byHouse.has(v.house)) byHouse.set(v.house, []); byHouse.get(v.house).push(v); }
+  for (const [h, vs] of byHouse) {
+    if (!vs.every(v => Data.botState(v.bot).halted)) continue;
+    const dx = h.spots.door.x, dy = h.y + h.h - 15;
+    R(ctx, dx - 13, dy + 3, 26, 9, '#5a1a14'); R(ctx, dx - 12, dy + 4, 24, 7, '#c9342b'); drawText(ctx, 'HALT', dx - 7, dy + 5, '#fff', F3);
+    for (let i = 0; i < 3; i++) {
+      const t = (Game.time * 0.5 + i / 3) % 1;
+      ctx.globalAlpha = 1 - t; drawTextOutlined(ctx, 'Z', h.x + h.w - 22 + t * 10 + i * 2, h.y + 4 - t * 22, '#ffffff', '#3a3a7a', F3); ctx.globalAlpha = 1;
+    }
+  }
+}
+
+function drawLighting(ctx) {
+  const n = Game.night, d = Game.dusk;
+  if (d > 0.02) { ctx.save(); ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = `rgba(255,178,120,${0.32 * d})`; ctx.fillRect(0, 0, WORLD_W, WORLD_H); ctx.restore(); }
+  if (n > 0.02) {
+    ctx.save(); ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = `rgba(40,48,122,${0.84 * n})`; ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+    const vg = ctx.createRadialGradient(WORLD_W / 2, WORLD_H / 2, WORLD_H * 0.35, WORLD_W / 2, WORLD_H / 2, WORLD_W * 0.62);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, `rgba(20,20,60,${0.55 * n})`);
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+    ctx.restore();
+  }
+  const light = Math.max(n, d * 0.45);
+  if (light < 0.1) return;
+  const glow = glowSprite();
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (const b of Object.values(World.buildings)) for (const w of b.win) {
+    if (hashStr(b.id + w.x) % 7 === 0) continue;
+    ctx.globalAlpha = 0.3 * light; ctx.drawImage(glow, w.x + w.w / 2 - 16, w.y + w.h / 2 - 12, 32, 32);
+  }
+  for (const l of World.lamps) { ctx.globalAlpha = 0.6 * light; ctx.drawImage(glow, l.x - 30, l.y - 22, 60, 60); }
+  ctx.restore();
+  ctx.save(); ctx.globalAlpha = Math.min(1, light * 1.3);
+  for (const b of Object.values(World.buildings)) for (const w of b.win) {
+    if (hashStr(b.id + w.x) % 7 === 0) continue;
+    R(ctx, w.x, w.y, w.w, w.h, P.lit); R(ctx, w.x, w.y, w.w, 1, P.litL); R(ctx, w.x + Math.floor(w.w / 2), w.y, 1, w.h, P.litD); R(ctx, w.x, w.y + Math.floor(w.h / 2), w.w, 1, P.litD);
+  }
+  for (const l of World.lamps) R(ctx, l.x - 2, l.y - 6, 4, 4, '#fff6c8');
+  ctx.restore();
+}
+
+function hitTest(x, y) {
+  const actors = [...Game.villagers.values(), Game.mayor].filter(a => !a.hidden).sort((a, b) => b.y - a.y);
+  for (const a of actors) if (x >= a.x - 7 && x <= a.x + 7 && y >= a.y - 24 && y <= a.y + 3) return { type: 'actor', a };
+  for (const b of Object.values(World.buildings)) { const h = b.hit; if (x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h) return { type: 'building', b }; }
+  return null;
+}
+function drawHover(ctx) {
+  const h = View.hover; if (!h) return;
+  const a = 0.45 + 0.3 * Math.sin(Game.time * 5);
+  ctx.save(); ctx.globalAlpha = a; ctx.strokeStyle = '#fff6d0'; ctx.lineWidth = 1;
+  if (h.type === 'building') { const r = h.b.hit; ctx.strokeRect(r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1); }
+  else { ctx.strokeRect(Math.round(h.a.x) - 8.5, Math.round(h.a.y) - 25.5, 17, 28); }
+  ctx.restore();
+}
+
+function draw() {
+  const ctx = View.ctx, k = View.k;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(World.staticCanvas, 0, 0, WORLD_W * k, WORLD_H * k);
+  ctx.setTransform(k, 0, 0, k, 0, 0);
+  drawWater(ctx);
+  for (const d of Game.ducks) d.draw(ctx);
+  drawGoldPile(ctx); drawSiloGauge(ctx); drawMarketBoard(ctx);
+  const actors = [...Game.villagers.values(), Game.mayor].sort((a, b) => a.y - b.y);
+  for (const a of actors) a.draw(ctx);
+  drawHouseStates(ctx);
+  drawParticles(ctx, Game.night > 0.5);
+  if (Game.night <= 0.5) drawBugs(ctx, false);
+  drawLighting(ctx);
+  if (Game.night > 0.5) drawBugs(ctx, true);
+  for (const a of actors) a.drawTag(ctx);
+  drawFloats(ctx);
+  drawHover(ctx);
+}
+
+let _last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - _last) / 1000); _last = now;
+  Game.time += dt;
+  try { update(dt); draw(); } catch (e) { console.error(e); }
+  requestAnimationFrame(frame);
+}
+
+/* ---------------------------------------------------------- input */
+function toWorld(e) { const r = View.canvas.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * WORLD_W, y: (e.clientY - r.top) / r.height * WORLD_H }; }
+function hoverText(h) {
+  if (!h) return '';
+  if (h.type === 'building') {
+    const b = h.b;
+    if (b.kind === 'profit') return `<b>Profit Room</b><span>Today ${esc(money(dayPnlTotal(), true, false))} · click for stats</span>`;
+    if (b.kind === 'silo') return `<b>Silo</b><span>Reserve ${esc(money(Data.treasury?.reserve, false, false))}</span>`;
+    if (b.kind === 'mayor') return `<b>Mayor's Office</b><span>Treasury & decisions</span>`;
+    if (b.kind === 'market') return `<b>Markets</b><span>${[...Game.villagers.values()].filter(v => v.position).length} open position(s)</span>`;
+    if (b.kind === 'house') { const vs = [...Game.villagers.values()].filter(v => v.house === b); return `<b>${esc(b.label)}</b><span>${vs.map(v => esc(v.activity)).join(' · ') || 'Empty'}</span>`; }
+  }
+  if (h.a === Game.mayor) return `<b>The Mayor</b><span>${esc(Game.mayor.activity)}</span>`;
+  const v = h.a; return `<b>${esc(v.sym)} · ${esc(Data.botName(v.bot))}</b><span>${esc(v.activity)}</span>`;
+}
+function setupInput() {
+  const c = View.canvas, tip = $('#tip');
+  const move = e => {
+    const p = toWorld(e); View.hover = hitTest(p.x, p.y);
+    c.style.cursor = View.hover ? 'pointer' : 'default';
+    if (View.hover && e.pointerType !== 'touch') { tip.innerHTML = hoverText(View.hover); tip.hidden = false; const r = $('#canvas-wrap').getBoundingClientRect(); tip.style.left = Math.min(r.width - 230, e.clientX - r.left + 14) + 'px'; tip.style.top = (e.clientY - r.top + 14) + 'px'; }
+    else tip.hidden = true;
+  };
+  c.addEventListener('pointermove', move);
+  c.addEventListener('pointerleave', () => { View.hover = null; tip.hidden = true; });
+  c.addEventListener('pointerdown', e => { View.down = { x: e.clientX, y: e.clientY }; });
+  c.addEventListener('pointerup', e => {
+    if (!View.down || dist(View.down.x, View.down.y, e.clientX, e.clientY) > 12) { View.down = null; return; }
+    View.down = null;
+    const p = toWorld(e), h = hitTest(p.x, p.y);
+    if (!h) return;
+    if (h.type === 'actor') return h.a === Game.mayor ? UI.openPlace('mayor') : UI.openPlace('house:' + h.a.sym);
+    const b = h.b;
+    UI.openPlace(b.kind === 'house' ? 'house:' + b.sym : b.kind);
+    if (e.pointerType === 'touch') { View.hover = null; }
   });
 }
-function addDecision(d) {
-  const el = document.getElementById('decision-list');
-  const div = document.createElement('div');
-  const cls = (d.action === 'move_to_reserve' || d.rule === 'profit_target_hit') ? 'profit'
-    : ((d.rule || '').includes('stop') || (d.rule || '').includes('cold') ? 'loss' : '');
-  div.className = 'decision ' + cls;
-  const time = (d.timestamp || '').slice(11, 16);
-  div.innerHTML = `<div class="dtime">${time} · ${d.rule || ''}</div><div>${d.reason || d.action || ''}</div>${d.amount ? `<div>Amount: ${fmtN(d.amount)}</div>` : ''}`;
-  el.appendChild(div);
-  while (el.children.length > 50) el.removeChild(el.lastChild);
-}
-let toastTimer = null;
-function toast(msg, good) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.style.borderColor = good === undefined ? '#ffd75e' : (good ? '#7dd87d' : '#d87d7d');
-  t.style.display = 'block';
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.style.display = 'none', 3000);
-}
 
-// ===== Canvas farm (unchanged from Part A) =====
-const cv = document.getElementById('farm');
-const ctx = cv.getContext('2d');
-const PX = 4;
-let coins = [];
-function spawnCoins(x, y, good) {
-  if (!good) return;
-  for (let i = 0; i < 8; i++) coins.push({ x, y, vx: (Math.random()-0.5)*4, vy: -2-Math.random()*3, life: 60 });
-}
-function drawPixel(x, y, w, h, c) { ctx.fillStyle = c; ctx.fillRect(x*PX, y*PX, w*PX, h*PX); }
-function drawVillager(b, t) {
-  const x = Math.round(b.x / PX), y = Math.round(b.y / PX);
-  const bob = Math.sin(t/300 + b.x) * 1;
-  drawPixel(x+5, y+18, 3, 5, '#3a2a1a'); drawPixel(x+9, y+18, 3, 5, '#3a2a1a');
-  drawPixel(x+4, y+10, 9, 9, b.color);
-  drawPixel(x+5, y+3, 7, 7, '#f5c99b');
-  drawPixel(x+5, y+3, 7, 2, '#4a2e15');
-  if (b.mood === 'sad') { drawPixel(x+6, y+6, 2, 1, '#222'); drawPixel(x+9, y+6, 2, 1, '#222'); drawPixel(x+7, y+8, 3, 1, '#222'); }
-  else if (b.mood === 'sleeping') { drawPixel(x+6, y+6, 4, 1, '#222'); }
-  else { drawPixel(x+6, y+5, 2, 2, '#222'); drawPixel(x+9, y+5, 2, 2, '#222'); }
-  if (b.carrying > 0) { drawPixel(x+5, y-3+bob*0.3, 7, 5, '#ffd75e'); drawPixel(x+6, y-2+bob*0.3, 2, 2, '#fff2b0'); }
-  ctx.fillStyle = '#fff'; ctx.font = '8px monospace'; ctx.textAlign = 'center';
-  ctx.fillText(b.name, b.x, b.y - 14 + bob);
-}
-function drawFarmhouse() {
-  drawPixel(100, 30, 40, 24, '#c9a06a');
-  drawPixel(100, 30, 40, 4, '#a8825a');
-  for (let i = 0; i < 10; i++) drawPixel(96+i*2, 22+i, 48-i*4, 3, '#b03a2e');
-  drawPixel(116, 42, 8, 12, '#5a3a1a');
-  drawPixel(104, 36, 8, 8, '#ffe9a8');
-  ctx.fillStyle = '#ffd75e'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
-  ctx.fillText('PROFIT ROOM', 480, 120);
-}
-function drawField(i, label) {
-  const fx = 30 + i * 55, fy = 110;
-  drawPixel(fx, fy, 40, 16, '#6b4a2e');
-  for (let r = 0; r < 4; r++) drawPixel(fx+2, fy+2+r*4, 36, 2, '#5a3a22');
-  ctx.fillStyle = '#f5e6c8'; ctx.font = '8px monospace'; ctx.textAlign = 'center';
-  ctx.fillText(label, (fx+20)*PX, (fy+20)*PX);
-}
-function drawGrass(t) {
-  ctx.fillStyle = '#5a9e4b'; ctx.fillRect(0, 0, 960, 640);
-  ctx.fillStyle = '#4e8c40';
-  for (let i = 0; i < 200; i++) {
-    const x = (i * 137) % 960, y = (i * 89) % 640;
-    ctx.fillRect(x, y, 4, 4);
-  }
-  ctx.fillStyle = '#c9b06a';
-  ctx.fillRect(460, 200, 40, 300);
-  ctx.fillStyle = '#4a90c9'; ctx.fillRect(780, 80, 120, 80);
-  ctx.fillStyle = '#5aa5dd'; ctx.fillRect(790, 90, 100, 60);
-  ctx.fillStyle = '#8a6a3a';
-  for (let x = 0; x < 960; x += 40) { ctx.fillRect(x, 600, 8, 24); }
-  ctx.fillRect(0, 604, 960, 6);
-}
-function nightOverlay() {
-  if (['closed','pre'].includes(S.session)) {
-    ctx.fillStyle = 'rgba(10,10,40,0.45)'; ctx.fillRect(0, 0, 960, 640);
-    ctx.fillStyle = '#fff';
-    for (let i = 0; i < 60; i++) ctx.fillRect((i*167)%960, (i*97)%300, 2, 2);
-    ctx.fillStyle = '#f5f0d0'; ctx.beginPath(); ctx.arc(850, 60, 24, 0, 7); ctx.fill();
-  }
-}
-function etClock() {
-  try {
-    return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York',
-      hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
-  } catch(_) { return ''; }
-}
-function tick(t) {
-  Object.values(S.bots).forEach(b => {
-    if (b.tx !== null) {
-      const dx = b.tx - b.x, dy = b.ty - b.y, d = Math.hypot(dx, dy);
-      if (d < 4) { b.tx = null; b.ty = null; if (b.mood !== 'sad' && b.mood !== 'sleeping') b.mood = 'idle'; b.carrying = 0; }
-      else { b.x += dx/d*2.2; b.y += dy/d*2.2; }
-    } else if (Math.random() < 0.005) { b.tx = 80 + Math.random()*800; b.ty = 350 + Math.random()*220; }
-  });
-  coins = coins.filter(c => c.life-- > 0);
-  coins.forEach(c => { c.x += c.vx; c.y += c.vy; c.vy += 0.15; });
-  drawGrass(t);
-  const ids = Object.keys(S.bots);
-  ids.forEach((id, i) => drawField(i, S.bots[id].name.slice(0,8)));
-  drawFarmhouse();
-  const reserve = (S.treasury && S.treasury.reserve) || 0;
-  const pileH = Math.min(40, 4 + reserve / 500);
-  ctx.fillStyle = '#ffd75e';
-  ctx.beginPath(); ctx.ellipse(480, 218, 30, pileH/2, 0, 0, 7); ctx.fill();
-  ctx.fillStyle = '#fff2b0'; ctx.beginPath(); ctx.ellipse(472, 214, 12, 4, 0, 0, 7); ctx.fill();
-  Object.values(S.bots).forEach(b => drawVillager(b, t));
-  coins.forEach(c => { ctx.fillStyle = '#ffd75e'; ctx.fillRect(c.x, c.y, 6, 6); });
-  nightOverlay();
-  ctx.fillStyle = '#f5e6c8'; ctx.font = '12px monospace'; ctx.textAlign = 'left';
-  ctx.fillText(etClock() + ' ET', 12, 24);
-  ctx.fillText('Session: ' + S.session, 12, 44);
-  requestAnimationFrame(tick);
-}
+/* ---------------------------------------------------------- demo mode (?demo, or opened as a file) */
+const Demo = {
+  bot: 'scalp-city', name: 'Scalp City', syms: ['SPY', 'QQQ', 'IWM'], open: {}, day: 0, reserve: 0, swept: 0, halted: false, target: false, stop: false, history: [],
+  rnd: mulberry32(Date.now() % 100000),
+  gauss() { let u = 0, v = 0; while (!u) u = this.rnd(); while (!v) v = this.rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); },
+  start() {
+    Data.conn = 'live'; Game.calmUntil = Game.time + 3;
+    // a month of believable history so Week/Month tabs have something to show
+    const today = etDay(); let d = addDays(today, -35);
+    const r = mulberry32(42);
+    while (d < today) {
+      if (isWeekday(d)) {
+        let pnl = 0, trades = 0, wins = 0;
+        for (let i = 0; i < 4 + Math.floor(r() * 8); i++) { const p = Math.round((r() - 0.42) * 600); pnl += p; trades++; if (p > 0) wins++; }
+        this.history.push({ date: d, pnl, trades, wins, streak: 0 });
+      }
+      d = addDays(d, 1);
+    }
+    this.treasury();
+    this.status();
+    setInterval(() => this.status(), 15000);
+    const loop = () => { this.tick(); setTimeout(loop, 2500 + this.rnd() * 4500); };
+    setTimeout(loop, 1500);
+  },
+  now() { return new Date().toISOString().replace(/\.\d+Z$/, 'Z'); },
+  tick() {
+    if (this.halted) return;
+    const sym = this.syms[Math.floor(this.rnd() * 3)];
+    const o = this.open[sym];
+    if (!o) {
+      const side = this.rnd() < 0.5 ? 'CALL' : 'PUT', qty = 20 + Math.floor(this.rnd() * 70), price = +(0.6 + this.rnd() * 2.6).toFixed(2);
+      this.open[sym] = { side, qty, price };
+      dispatch({ type: 'trade', bot_id: this.bot, bot_name: this.name, timestamp: this.now(), symbol: sym, side, action: 'open', qty, price, reason: 'demo-signal' }, true);
+    } else {
+      delete this.open[sym];
+      const pnl = Math.round((this.gauss() * 260 + 30) * 100) / 100;
+      this.day += pnl;
+      dispatch({ type: 'trade', bot_id: this.bot, bot_name: this.name, timestamp: this.now(), symbol: sym, side: o.side, action: 'close', qty: o.qty, price: Math.max(0.05, +(o.price + pnl / (o.qty * 100)).toFixed(2)), pnl, reason: pnl > 0 ? 'take-profit' : 'atr-stop', pnl_estimated: true }, true);
+      if (!this.target && this.day >= 500) { this.target = true; const amt = this.day - this.swept; this.swept += amt; this.reserve += amt; this.decide('profit_target_hit', 'move_to_reserve', amt, `Daily profit target hit; ${money(amt)} moved to reserve, bot keeps trading`); }
+      if (!this.stop && this.day <= -1000) { this.stop = true; this.halted = true; this.decide('daily_stop_hit', 'halt_bot', 0, 'Daily stop hit; new entries blocked'); setTimeout(() => { this.halted = false; this.decide('manual_resume', 'resume_bot', 0, 'Demo: back to work'); }, 30000); }
+    }
+    this.status();
+  },
+  decide(rule, action, amount, reason) { dispatch({ type: 'decision', timestamp: this.now(), rule, bot_id: this.bot, action, amount: Math.round(amount * 100) / 100, reason }, true); },
+  status() {
+    dispatch({ type: 'status', bot_id: this.bot, timestamp: this.now(), day_pnl: Math.round(this.day * 100) / 100, halted: this.halted, positions: Object.entries(this.open).map(([symbol, o]) => ({ symbol, side: o.side, qty: o.qty })), data_lag_min: 15, session: SESSION_OVERRIDE || 'open', stale: false }, true);
+  },
+  treasury() {
+    applyTreasury({
+      total: 100000 + this.day + this.reserve - this.swept + this.reserve * 0, reserve: this.reserve, withdrawn: 0, reserve_available: this.reserve, contributed: 100000,
+      allocations: { [this.bot]: { allocated: 100000, day_pnl: this.day - this.swept, streak: 2, bot_name: this.name, day_pnl_gross: this.day, swept_today: this.swept, parked: 0, halted: this.halted, day: etDay(), history: this.history } },
+      decisions: [],
+    });
+  },
+};
 
-// ===== Init =====
-document.getElementById('t-clock').textContent = etClock() + ' ET';
-setInterval(() => { document.getElementById('t-clock').textContent = etClock() + ' ET'; }, 15000);
-pollState();
-setInterval(pollState, POLL_MS);
-requestAnimationFrame(tick);
+/* ---------------------------------------------------------- boot */
+function boot() {
+  View.canvas = $('#world'); View.ctx = View.canvas.getContext('2d');
+  loadLocal();
+  buildLayout(); renderStatic();
+  Game.mayor = new Mayor();
+  Game.ducks = [new Duck(80, 262), new Duck(130, 280)];
+  ensureVillagers();
+  UI.init();
+  resize();
+  new ResizeObserver(resize).observe($('#canvas-wrap'));
+  setupInput();
+  Feed.connect();
+  if (!DEMO) setInterval(fetchTreasury, 30000);
+  else setInterval(() => Demo.treasury(), 5000);
+  requestAnimationFrame(frame);
+}
+<script>
+/* ---- Static adapter: GitHub Pages has no WebSocket server, so poll the
+   static JSON files the farm pushes and feed them through dispatch(). ---- */
+(function(){
+  async function getJSON(path){
+    const r = await fetch(path, {cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.json();
+  }
+  function synthStatus(st){
+    return { type:'status', bot_id:'scalp-city', bot_name:'Scalp City',
+      timestamp: st.time || new Date().toISOString(),
+      day_pnl: Number(st.day_pnl)||0, halted: !!st.halted,
+      positions: st.positions||[], data_lag_min: st.data_lag_min,
+      session: st.session || undefined };
+  }
+  async function pollStatic(){
+    try { const st = await getJSON('state.json'); dispatch(synthStatus(st), true); Data.conn='live'; }
+    catch(e){ Data.conn='offline'; }
+    try {
+      const ds = await getJSON('decisions.json');
+      const list = Array.isArray(ds) ? ds : (ds.decisions||[]);
+      for(const d of list){ if(!d.type) d.type='decision'; dispatch(d, true); }
+    } catch(e){}
+    renderInbox(); UI.dirty = true;
+  }
+  Feed.connect = function(){ pollStatic(); setInterval(pollStatic, 30000); };
+  fetchTreasury = async function(){
+    try { applyTreasury(await getJSON('treasury.json')); } catch(e){}
+  };
+})();
+/* ---- Decision Inbox: only decisions the agents can't make themselves ---- */
+function renderInbox(){
+  const box = document.getElementById('inbox'); if(!box) return;
+  const pending = (Data.decisions||[]).filter(d => d.requires_confirmation && !d.confirmed_at);
+  if(!pending.length){ box.innerHTML = '<div class="inbox-empty">\u2705 Nothing needs you. The Mayor handles the rest.</div>'; return; }
+  box.innerHTML = '';
+  for(const d of pending){
+    const card = document.createElement('div'); card.className='inbox-card';
+    const q = document.createElement('div'); q.className='inbox-q'; q.textContent = d.question || 'Decision needed';
+    const why = document.createElement('div'); why.className='inbox-why'; why.textContent = d.reason || '';
+    card.appendChild(q); card.appendChild(why);
+    for(const opt of (d.options||[])){
+      const label = opt.label || opt;
+      const b = document.createElement('button'); b.className='inbox-btn'; b.textContent = label;
+      b.onclick = () => UI.toast('Tell Muse in chat: \u201c' + label + '\u201d', 'The Mayor updates within ~15 min.');
+      card.appendChild(b);
+    }
+    if(d.default_action){
+      const def = document.createElement('div'); def.className='inbox-default';
+      def.textContent = "If you don't answer: " + d.default_action; card.appendChild(def);
+    }
+    box.appendChild(card);
+  }
+}
+</script>
+document.addEventListener('DOMContentLoaded', boot);
+
 </script>
 </body>
 </html>
