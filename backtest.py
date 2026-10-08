@@ -16,7 +16,7 @@ import pytz
 
 from config import Config
 from signals import check_signals, atr
-from risk import contracts_for_risk
+from risk import contracts_for_risk, DailyGuard
 
 ET = pytz.timezone("America/New_York")
 
@@ -40,12 +40,16 @@ def run(csv_path, cfg=None, slippage=1.0):
         n = len(day)
         i = max(cfg.ema_trend + 2, cfg.orb_minutes + 2)
         last_exit_t = None
+        # Same risk guard as live trading: halt the day at +$500 / -$1,000.
+        guard = DailyGuard(cfg.daily_profit_target, cfg.max_daily_loss)
         while i < n:
             t = day["time"].iloc[i]
             if (last_exit_t is not None
                     and t - last_exit_t < timedelta(minutes=cfg.cooldown_minutes)):
                 i += 1
                 continue
+            if guard.halted():
+                break  # daily stop/target hit: done for the day, like live
             window = day.iloc[: i + 1]  # today's bars only -> daily VWAP/ORB
             sigs = check_signals(window, cfg)
             if not sigs:
@@ -73,6 +77,7 @@ def run(csv_path, cfg=None, slippage=1.0):
             trades += 1
             wins += pnl > 0
             pnl_total += pnl
+            guard.pnl += pnl
             last_exit_t = day["time"].iloc[min(j, n - 1)]
             i = j + 1 if j < n else n
     wr = wins / trades if trades else 0

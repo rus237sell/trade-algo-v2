@@ -15,7 +15,7 @@ import pytz
 from config import Config
 from data import TradierData
 from alpaca import AlpacaData, AlpacaBroker
-from signals import check_signals, atr
+from signals import check_signals, atr, vwap
 from risk import DailyGuard, Cooldowns, Position, contracts_for_risk
 from broker import DryRunBroker, TradierBroker, occ_symbol
 
@@ -124,10 +124,24 @@ class Bot:
         self.broker.place(occ, side, qty, tag=f"v2:{reason}")
         self.positions[symbol] = Position(occ, side, qty, premium, px, a)
         self.cooldowns.mark(symbol, now)
+        # Research tags for the trade dataset: never allowed to raise.
+        try:
+            et_now = now.astimezone(ET)
+            time_et = et_now.strftime("%H:%M")
+            open_et = et_now.replace(hour=9, minute=30, second=0, microsecond=0)
+            min_into_session = int((et_now - open_et).total_seconds() // 60)
+            v = vwap(df).iloc[-1]
+            vwap_dist_pct = round(100.0 * (float(px) - float(v)) / float(px), 3) \
+                if px and v == v else None
+            atr_val = round(float(a), 2)
+        except Exception:
+            time_et, min_into_session, vwap_dist_pct, atr_val = None, None, None, None
         emit_trade({"action": "open", "symbol": symbol, "side": side, "qty": int(qty),
                     "price": round(float(premium), 2), "occ": occ,
                     "underlying_px": round(float(px), 2), "reason": reason,
-                    "pnl_estimated": True})
+                    "pnl_estimated": True,
+                    "time_et": time_et, "min_into_session": min_into_session,
+                    "vwap_dist_pct": vwap_dist_pct, "atr": atr_val})
         print(f"ENTER {symbol} {side} {qty}x {occ} strike={strike} ({reason})")
 
     def _exit(self, symbol, pos, reason, px):
