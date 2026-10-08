@@ -126,7 +126,8 @@ class AlpacaData:
             params = {"timeframe": "1Min",
                       "start": _utc_z(start),
                       "end": _utc_z(end),
-                      "limit": 10000, "adjustment": "raw"}
+                      "limit": 10000, "adjustment": "raw",
+                      "feed": "iex"}  # free plan: IEX 15-min delayed only
             if token:
                 params["page_token"] = token
             r = requests.get(f"{DATA_BASE}/v2/stocks/{symbol}/bars",
