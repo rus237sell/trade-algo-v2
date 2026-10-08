@@ -22,6 +22,18 @@ from broker import DryRunBroker, TradierBroker, occ_symbol
 ET = pytz.timezone("America/New_York")
 
 
+def emit_trade(rec):
+    """Append one trade event (JSONL) for the dashboard feed. Never raises."""
+    try:
+        rec = {"type": "trade", "bot_id": "scalp-city", "bot_name": "Scalp City",
+               "timestamp": datetime.now(ET).isoformat(), **rec}
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trades.jsonl")
+        with open(path, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+    except Exception:
+        pass
+
+
 def parse_t(s):
     h, m = map(int, s.split(":"))
     return dtime(h, m)
@@ -112,6 +124,10 @@ class Bot:
         self.broker.place(occ, side, qty, tag=f"v2:{reason}")
         self.positions[symbol] = Position(occ, side, qty, premium, px, a)
         self.cooldowns.mark(symbol, now)
+        emit_trade({"action": "open", "symbol": symbol, "side": side, "qty": int(qty),
+                    "price": round(float(premium), 2), "occ": occ,
+                    "underlying_px": round(float(px), 2), "reason": reason,
+                    "pnl_estimated": True})
         print(f"ENTER {symbol} {side} {qty}x {occ} strike={strike} ({reason})")
 
     def _exit(self, symbol, pos, reason, px):
@@ -119,6 +135,10 @@ class Bot:
         self.broker.close(pos.occ, pos.qty, tag=f"v2:{reason}")
         self.guard.pnl += pnl
         del self.positions[symbol]
+        emit_trade({"action": "close", "symbol": symbol, "side": pos.side, "qty": int(pos.qty),
+                    "price": round(float(px), 2), "occ": pos.occ,
+                    "underlying_px": round(float(px), 2), "reason": reason,
+                    "pnl": round(float(pnl), 2), "pnl_estimated": True})
         print(f"EXIT {symbol} {pos.side} ({reason}) est_pnl={pnl:+.2f} day={self.guard.pnl:+.2f}")
 
     def _save_state(self, now, session_state, max_lag_min, stale_data=False):
