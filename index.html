@@ -232,7 +232,7 @@ const WORLD_W = 48 * TILE;   // 768
 const WORLD_H = 32 * TILE;   // 512
 const ET_TZ = 'America/New_York';
 const QS = new URLSearchParams(location.search);
-const DEMO = QS.has('demo') || !/^https?:$/.test(location.protocol);   // opened as a file/preview -> simulated trades
+const DEMO = false; // public dashboard: live data only   // opened as a file/preview -> simulated trades
 const SESSION_OVERRIDE = QS.get('session');   // ?session=closed to preview night
 
 function mulberry32(a) {
