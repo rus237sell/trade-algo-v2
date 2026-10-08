@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trade Farm v1</title>
+<!--
+  TRADE FARM DASHBOARD v1 — file-based edition.
+  Reads ./state.json (same directory) every 30s. No WebSocket, no auth, no backend needed.
+
+  state.json SCHEMA (all fields optional except where noted; missing = "unknown", never faked):
+  {
+    "schema": "trade-farm-dashboard-v1",
+    "updated_at": "2026-10-08T12:00:00-04:00",   // REQUIRED: when this snapshot was written (ISO8601)
+    "feed":   { "alive": true, "source": "alpaca", "data_age_min": 1.2, "data_lag_min": 1.2, "stale": false },
+    "session": { "state": "open", "session_date": "2026-10-08", "flatten_et": "15:45" },
+    "treasury": { "total": 100039.24, "reserve": 0, "withdrawn": 0,
+                  "allocations": { "scalp-city": { "bot_name": "Scalp City", "allocated": 100000,
+                                    "day_pnl": 39.24, "day_pnl_gross": 39.24, "streak": 0, "halted": false } } },
+    "farmers": [ { "bot_id": "scalp-city", "bot_name": "Scalp City", "day_pnl": 39.24,
+                   "halted": false, "halt_reason": null, "session": "open",
+                   "data_lag_min": 1.2, "stale_data": false,
+                   "positions": [ {"symbol":"QQQ","side":"CALL","qty":48,"occ":"QQQ261008C00740000"} ] } ],
+    "limits":  { "profit_target": 500, "daily_stop": -1000, "profit_swept_today": 0 },
+    "red_switch": { "tripped": false, "reason": null, "tripped_at": null },
+    "decisions": [ { "timestamp": "...", "rule": "bot_registered", "action": "allocate",
+                     "bot_id": "scalp-city", "amount": 100000, "reason": "..." } ]
+  }
+  Offline rule: if state.json can't be fetched, or updated_at is older than 10 minutes,
+  the page shows a FEED DOWN banner and renders the last good snapshot from localStorage
+  labeled "last known". If there is no snapshot at all, it says so honestly. Numbers are
+  never invented.
+-->
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #1a2e1a; font-family: 'Press Start 2P', monospace; color: #f5e6c8; font-size: 11px; }
+#topbar { background: #2d4a2d; border-bottom: 4px solid #1a2e1a; padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+#topbar h1 { font-size: 14px; color: #ffd75e; text-shadow: 2px 2px 0 #5a3a1a; }
+#topbar .stats { display: flex; gap: 20px; font-size: 10px; align-items: center; flex-wrap: wrap; }
+.stat-label { color: #a8d5a8; }
+#conn { padding: 4px 8px; border: 2px solid #5a3a1a; background: #3a2a1a; }
+#conn.live { background: #2d6a2d; border-color: #7dd87d; }
+#conn.dead { background: #6a2d2d; border-color: #d87d7d; }
+#feedbanner { display: none; background: #6a2d2d; border-bottom: 4px solid #d87d7d; color: #ffd0d0; padding: 10px 16px; font-size: 10px; line-height: 1.7; }
+#redbanner { display: none; background: #5a1010; border-bottom: 4px solid #ff3b3b; color: #ffe0e0; padding: 12px 16px; font-size: 11px; line-height: 1.7; }
+#main { display: flex; height: calc(100vh - 60px); }
+#farm-wrap { flex: 1; position: relative; background: #0d1a0d; display: flex; align-items: center; justify-content: center; }
+#farm { image-rendering: pixelated; max-width: 100%; max-height: 100%; border: 4px solid #5a3a1a; }
+#side { width: 340px; background: #2d4a2d; border-left: 4px solid #1a2e1a; display: flex; flex-direction: column; overflow-y: auto; }
+.panel { padding: 12px; border-bottom: 3px solid #1a2e1a; }
+.panel h2 { font-size: 11px; color: #ffd75e; margin-bottom: 10px; text-shadow: 1px 1px 0 #5a3a1a; }
+.trow { display: flex; justify-content: space-between; font-size: 10px; margin: 5px 0; }
+.bot-card { background: #3a5a3a; border: 2px solid #5a3a1a; padding: 8px; margin-bottom: 8px; }
+.bot-card .bname { color: #ffd75e; font-size: 10px; margin-bottom: 6px; }
+.bot-card .brow { display: flex; justify-content: space-between; font-size: 9px; margin: 3px 0; }
+.pos { color: #7dd87d; } .neg { color: #ff8a8a; }
+.halted-badge { background: #6a2d2d; color: #ffb0b0; padding: 2px 6px; font-size: 8px; }
+.stale-badge { background: #6a5a2d; color: #ffe9a8; padding: 2px 6px; font-size: 8px; }
+.bar { height: 10px; background: #1a2e1a; border: 2px solid #5a3a1a; margin: 4px 0 8px; position: relative; }
+.bar > div { height: 100%; }
+.bar .mark { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #f5e6c8; }
+.decision { background: #3a2a1a; border: 2px solid #5a3a1a; padding: 8px; margin-bottom: 8px; font-size: 9px; line-height: 1.6; }
+.decision .dtime { color: #a8a8a8; font-size: 8px; }
+.decision.profit { border-color: #7dd87d; } .decision.loss { border-color: #d87d7d; }
+#toast { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); background: #3a2a1a; border: 3px solid #ffd75e; padding: 12px 20px; font-size: 11px; display: none; z-index: 10; }
+#nodata { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); background: #3a2a1a; border: 3px solid #5a3a1a; padding: 24px 32px; font-size: 11px; line-height: 2; text-align: center; display: none; z-index: 5; }
+.small { font-size: 8px; color: #a8d5a8; }
+</style>
+</head>
+<body>
+<div id="paperbanner" style="background:#3a2c07;border-bottom:4px solid #d8a723;color:#ffe9a8;text-align:center;padding:8px 12px;font-size:11px;letter-spacing:1px;">&#x1F4DD; PAPER TRADING SIMULATION &mdash; no real money is traded. Educational project.</div>
+<div id="topbar">
+  <h1>🌾 Trade Farm</h1>
+  <div class="stats">
+    <div><span class="stat-label">Treasury:</span> <span id="t-total">—</span></div>
+    <div><span class="stat-label">Reserve:</span> <span id="t-reserve">—</span></div>
+    <div><span class="stat-label">Day P&amp;L:</span> <span id="t-daypnl">—</span></div>
+    <div><span class="stat-label">ET:</span> <span id="t-clock">—</span></div>
+    <div id="conn" class="dead">OFFLINE</div>
+  </div>
+</div>
+<div id="feedbanner"></div>
+<div id="redbanner"></div>
+<div id="main">
+  <div id="farm-wrap">
+    <canvas id="farm" width="960" height="640"></canvas>
+    <div id="toast"></div>
+    <div id="nodata">📡 No farm data yet.<br><span class="small">state.json not found next to this page.<br>The farm hasn't reported in.</span></div>
+  </div>
+  <div id="side">
+    <div class="panel" id="feedpanel">
+      <h2>📻 Feed Health</h2>
+      <div class="trow"><span>Source:</span><span id="f-source">—</span></div>
+      <div class="trow"><span>Data age:</span><span id="f-age">—</span></div>
+      <div class="trow"><span>Data lag:</span><span id="f-lag">—</span></div>
+      <div class="trow"><span>Session:</span><span id="f-session">—</span></div>
+      <div class="trow"><span>Flatten (ET):</span><span id="f-flatten">—</span></div>
+      <div id="f-badges" style="margin-top:6px"></div>
+    </div>
+    <div class="panel" id="treasurypanel">
+      <h2>🏦 Treasury</h2>
+      <div class="trow"><span>Silo (reserve):</span><span id="tr-reserve">—</span></div>
+      <div class="trow"><span>Withdrawn:</span><span id="tr-withdrawn">—</span></div>
+      <div class="trow"><span>Farmers:</span><span id="tr-bots">—</span></div>
+    </div>
+    <div class="panel" id="limitspanel">
+      <h2>⚖️ Treasurer Limits</h2>
+      <div class="trow"><span>Profit target +$500</span><span id="l-profit">—</span></div>
+      <div class="bar"><div id="l-profit-bar" style="width:0%;background:#7dd87d"></div></div>
+      <div class="trow"><span>Daily stop −$1,000</span><span id="l-loss">—</span></div>
+      <div class="bar"><div id="l-loss-bar" style="width:0%;background:#d87d7d"></div></div>
+      <div class="trow"><span>Swept today:</span><span id="l-swept">—</span></div>
+    </div>
+    <div class="panel" id="redpanel">
+      <h2>🚨 Red Switch</h2>
+      <div class="trow"><span>State:</span><span id="r-state">—</span></div>
+      <div class="trow"><span>Reason:</span><span id="r-reason">—</span></div>
+      <div class="small" style="margin-top:6px;line-height:1.7">Trips on: daily stop · dead feed · rogue farmer · any real-money action. Nothing resumes without a human.</div>
+    </div>
+    <div class="panel" id="bots"><h2>🧑‍🌾 Farmers</h2><div id="bot-list"><div class="small">waiting for data…</div></div></div>
+    <div class="panel" id="ledger"><h2>📜 Mayor's Ledger</h2><div id="decision-list"><div class="small">no decisions yet</div></div></div>
+  </div>
+</div>
+<script>
+// ===== State =====
+const S = { bots: {}, treasury: null, feed: null, limits: null, red: null,
+            session: 'closed', connected: false, lastOk: null, staleView: false };
+const BOT_COLORS = ['#e74c3c','#3498db','#2ecc71','#f39c12','#9b59b6','#1abc9c'];
+let colorIdx = 0;
+const POLL_MS = 30000, OFFLINE_AFTER_MIN = 10;
+
+// ===== Polling (replaces WebSocket in v1) =====
+async function pollState() {
+  try {
+    const r = await fetch('state.json', { cache: 'no-store' });
+    if (!r.ok) throw new Error('http ' + r.status);
+    const st = await r.json();
+    applyState(st, false);
+    try { localStorage.setItem('farmv1', JSON.stringify({ at: Date.now(), state: st })); } catch(_) {}
+  } catch (e) { onFeedDown(); }
+}
+function onFeedDown() {
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem('farmv1')); } catch(_) {}
+  if (cached && cached.state) {
+    applyState(cached.state, true);
+  } else {
+    setConn(false);
+    document.getElementById('nodata').style.display = 'block';
+    showFeedBanner('FEED DOWN — no state.json found and no cached snapshot. The farm has not reported in.');
+  }
+}
+function showFeedBanner(msg) {
+  const b = document.getElementById('feedbanner');
+  b.textContent = msg; b.style.display = 'block';
+}
+function hideFeedBanner() { document.getElementById('feedbanner').style.display = 'none'; }
+
+function applyState(st, isCached) {
+  document.getElementById('nodata').style.display = 'none';
+  const updatedAt = st.updated_at ? new Date(st.updated_at) : null;
+  const ageMin = updatedAt ? (Date.now() - updatedAt.getTime()) / 60000 : null;
+  const tooOld = ageMin === null || ageMin > OFFLINE_AFTER_MIN;
+  S.lastOk = updatedAt;
+  S.staleView = isCached || tooOld;
+  setConn(!S.staleView);
+
+  if (S.staleView) {
+    const when = updatedAt ? updatedAt.toLocaleString() : 'unknown';
+    showFeedBanner('⚠️ FEED DOWN — showing last known state from ' + when +
+      '. Numbers below are NOT live. Check the farm writer / droplet runner.');
+  } else hideFeedBanner();
+
+  // feed panel
+  const f = st.feed || {};
+  document.getElementById('f-source').textContent = f.source || '—';
+  document.getElementById('f-age').textContent = ageMin === null ? '—' : ageMin < 1 ? '<1 min' : ageMin.toFixed(0) + ' min';
+  const lag = f.data_lag_min;
+  const lagEl = document.getElementById('f-lag');
+  lagEl.textContent = (lag === null || lag === undefined) ? '—' : lag.toFixed(1) + ' min';
+  lagEl.className = (lag !== null && lag !== undefined && lag > 30) ? 'neg' : '';
+  const sess = (st.session && st.session.state) || '—';
+  document.getElementById('f-session').textContent = sess;
+  document.getElementById('f-flatten').textContent = (st.session && st.session.flatten_et) || '15:45';
+  S.session = sess;
+  const badges = [];
+  if (f.stale) badges.push('<span class="stale-badge">STALE FEED</span>');
+  if (tooOld) badges.push('<span class="stale-badge">DATA OLD</span>');
+  document.getElementById('f-badges').innerHTML = badges.join(' ');
+
+  // treasury
+  const t = st.treasury || {};
+  S.treasury = t;
+  document.getElementById('t-total').textContent = fmtN(t.total);
+  document.getElementById('t-reserve').textContent = fmtN(t.reserve);
+  document.getElementById('tr-reserve').textContent = fmtN(t.reserve);
+  document.getElementById('tr-withdrawn').textContent = fmtN(t.withdrawn);
+  const allocs = t.allocations || {};
+  const ids = Object.keys(allocs);
+  document.getElementById('tr-bots').textContent = ids.length || (st.farmers || []).length || '—';
+  let daySum = 0, swept = 0;
+  (st.farmers || []).forEach(x => { daySum += (x.day_pnl || 0); });
+  if (!st.farmers && ids.length) ids.forEach(id => { daySum += (allocs[id].day_pnl || 0); });
+  const de = document.getElementById('t-daypnl');
+  de.textContent = (daySum >= 0 ? '+' : '') + fmtN(daySum);
+  de.className = daySum >= 0 ? 'pos' : 'neg';
+
+  // treasurer limits
+  const lim = st.limits || {};
+  const pt = lim.profit_target !== undefined ? lim.profit_target : 500;
+  const ds = lim.daily_stop !== undefined ? lim.daily_stop : -1000;
+  document.getElementById('l-profit').textContent = (daySum >= 0 ? '+' : '') + fmtN(daySum) + ' / +' + fmtN(pt);
+  document.getElementById('l-profit-bar').style.width = Math.min(100, Math.max(0, daySum / pt * 100)) + '%';
+  document.getElementById('l-loss').textContent = (daySum >= 0 ? '+' : '') + fmtN(daySum) + ' / ' + fmtN(ds);
+  document.getElementById('l-loss-bar').style.width = Math.min(100, Math.max(0, daySum / ds * 100)) + '%';
+  document.getElementById('l-swept').textContent = fmtN(lim.profit_swept_today);
+
+  // red switch
+  const rs = st.red_switch || {};
+  const rState = document.getElementById('r-state');
+  const rb = document.getElementById('redbanner');
+  if (rs.tripped) {
+    rState.innerHTML = '<span class="halted-badge">TRIPPED</span>';
+    document.getElementById('r-reason').textContent = (rs.reason || 'unknown') +
+      (rs.tripped_at ? ' @ ' + String(rs.tripped_at).slice(11, 16) : '');
+    rb.style.display = 'block';
+    rb.textContent = '🚨 RED SWITCH TRIPPED — ' + (rs.reason || 'unknown reason') +
+      '. All trading frozen. A human must clear this.';
+  } else {
+    rState.innerHTML = '<span class="pos">ARMED</span>';
+    document.getElementById('r-reason').textContent = '—';
+    rb.style.display = 'none';
+  }
+
+  // farmers
+  (st.farmers || []).forEach(ev => onFarmer(ev));
+  renderBots();
+
+  // decisions
+  const dl = document.getElementById('decision-list');
+  dl.innerHTML = '';
+  const decs = st.decisions || [];
+  if (!decs.length) dl.innerHTML = '<div class="small">no decisions yet</div>';
+  decs.slice().reverse().forEach(d => addDecision(d));
+}
+
+function setConn(live) {
+  S.connected = live;
+  const el = document.getElementById('conn');
+  el.className = live ? 'live' : 'dead';
+  el.textContent = live ? 'LIVE' : 'OFFLINE';
+}
+
+// ===== Farmers =====
+function getBot(id, name) {
+  if (!S.bots[id]) {
+    S.bots[id] = { id, name: name || id, color: BOT_COLORS[colorIdx++ % BOT_COLORS.length],
+      x: 100 + Math.random()*760, y: 400 + Math.random()*180, tx: null, ty: null,
+      carrying: 0, mood: 'idle', day_pnl: 0, halted: false, positions: [], session: 'closed' };
+  }
+  return S.bots[id];
+}
+function onFarmer(ev) {
+  const b = getBot(ev.bot_id, ev.bot_name);
+  const prevPnl = b.day_pnl;
+  b.day_pnl = ev.day_pnl || 0;
+  b.halted = !!ev.halted;
+  b.positions = ev.positions || [];
+  if (ev.session) { b.session = ev.session; S.session = ev.session; }
+  if (b.halted) b.mood = 'sad';
+  else if (ev.stale_data) b.mood = 'sleeping';
+  else if (b.day_pnl > prevPnl && b.day_pnl > 0) { b.mood = 'happy'; b.carrying = Math.max(1, Math.round(b.day_pnl/100)); }
+  else if (b.day_pnl < 0) b.mood = 'sad';
+  else if (b.positions.length) b.mood = 'working';
+  else b.mood = 'idle';
+}
+
+// ===== UI rendering =====
+function fmtN(n) {
+  if (n === null || n === undefined) return '—';
+  const s = n < 0 ? '-' : '';
+  return s + '$' + Math.abs(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
+}
+function renderBots() {
+  const el = document.getElementById('bot-list');
+  el.innerHTML = '';
+  const bots = Object.values(S.bots);
+  if (!bots.length) { el.innerHTML = '<div class="small">waiting for data…</div>'; return; }
+  bots.forEach(b => {
+    const d = document.createElement('div');
+    d.className = 'bot-card';
+    const pnlCls = b.day_pnl >= 0 ? 'pos' : 'neg';
+    const posHtml = b.positions.length
+      ? b.positions.map(p => `<div class="brow"><span>${p.symbol||'?'} ${p.side||''}</span><span>${p.qty||''}x</span></div>`).join('')
+      : '<div class="brow"><span>Positions:</span><span>flat</span></div>';
+    d.innerHTML = `<div class="bname" style="color:${b.color}">● ${b.name}</div>
+      <div class="brow"><span>Day P&amp;L:</span><span class="${pnlCls}">${b.day_pnl >= 0 ? '+' : ''}${fmtN(b.day_pnl)}</span></div>
+      ${posHtml}
+      <div class="brow"><span>Data lag:</span><span>${b.data_lag !== undefined && b.data_lag !== null ? b.data_lag + 'm' : '—'}</span></div>
+      ${b.halted ? '<div class="brow"><span class="halted-badge">HALTED</span></div>' : ''}`;
+    el.appendChild(d);
+  });
+}
+function addDecision(d) {
+  const el = document.getElementById('decision-list');
+  const div = document.createElement('div');
+  const cls = (d.action === 'move_to_reserve' || d.rule === 'profit_target_hit') ? 'profit'
+    : ((d.rule || '').includes('stop') || (d.rule || '').includes('cold') ? 'loss' : '');
+  div.className = 'decision ' + cls;
+  const time = (d.timestamp || '').slice(11, 16);
+  div.innerHTML = `<div class="dtime">${time} · ${d.rule || ''}</div><div>${d.reason || d.action || ''}</div>${d.amount ? `<div>Amount: ${fmtN(d.amount)}</div>` : ''}`;
+  el.appendChild(div);
+  while (el.children.length > 50) el.removeChild(el.lastChild);
+}
+let toastTimer = null;
+function toast(msg, good) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.borderColor = good === undefined ? '#ffd75e' : (good ? '#7dd87d' : '#d87d7d');
+  t.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.style.display = 'none', 3000);
+}
+
+// ===== Canvas farm (unchanged from Part A) =====
+const cv = document.getElementById('farm');
+const ctx = cv.getContext('2d');
+const PX = 4;
+let coins = [];
+function spawnCoins(x, y, good) {
+  if (!good) return;
+  for (let i = 0; i < 8; i++) coins.push({ x, y, vx: (Math.random()-0.5)*4, vy: -2-Math.random()*3, life: 60 });
+}
+function drawPixel(x, y, w, h, c) { ctx.fillStyle = c; ctx.fillRect(x*PX, y*PX, w*PX, h*PX); }
+function drawVillager(b, t) {
+  const x = Math.round(b.x / PX), y = Math.round(b.y / PX);
+  const bob = Math.sin(t/300 + b.x) * 1;
+  drawPixel(x+5, y+18, 3, 5, '#3a2a1a'); drawPixel(x+9, y+18, 3, 5, '#3a2a1a');
+  drawPixel(x+4, y+10, 9, 9, b.color);
+  drawPixel(x+5, y+3, 7, 7, '#f5c99b');
+  drawPixel(x+5, y+3, 7, 2, '#4a2e15');
+  if (b.mood === 'sad') { drawPixel(x+6, y+6, 2, 1, '#222'); drawPixel(x+9, y+6, 2, 1, '#222'); drawPixel(x+7, y+8, 3, 1, '#222'); }
+  else if (b.mood === 'sleeping') { drawPixel(x+6, y+6, 4, 1, '#222'); }
+  else { drawPixel(x+6, y+5, 2, 2, '#222'); drawPixel(x+9, y+5, 2, 2, '#222'); }
+  if (b.carrying > 0) { drawPixel(x+5, y-3+bob*0.3, 7, 5, '#ffd75e'); drawPixel(x+6, y-2+bob*0.3, 2, 2, '#fff2b0'); }
+  ctx.fillStyle = '#fff'; ctx.font = '8px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(b.name, b.x, b.y - 14 + bob);
+}
+function drawFarmhouse() {
+  drawPixel(100, 30, 40, 24, '#c9a06a');
+  drawPixel(100, 30, 40, 4, '#a8825a');
+  for (let i = 0; i < 10; i++) drawPixel(96+i*2, 22+i, 48-i*4, 3, '#b03a2e');
+  drawPixel(116, 42, 8, 12, '#5a3a1a');
+  drawPixel(104, 36, 8, 8, '#ffe9a8');
+  ctx.fillStyle = '#ffd75e'; ctx.font = '10px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('PROFIT ROOM', 480, 120);
+}
+function drawField(i, label) {
+  const fx = 30 + i * 55, fy = 110;
+  drawPixel(fx, fy, 40, 16, '#6b4a2e');
+  for (let r = 0; r < 4; r++) drawPixel(fx+2, fy+2+r*4, 36, 2, '#5a3a22');
+  ctx.fillStyle = '#f5e6c8'; ctx.font = '8px monospace'; ctx.textAlign = 'center';
+  ctx.fillText(label, (fx+20)*PX, (fy+20)*PX);
+}
+function drawGrass(t) {
+  ctx.fillStyle = '#5a9e4b'; ctx.fillRect(0, 0, 960, 640);
+  ctx.fillStyle = '#4e8c40';
+  for (let i = 0; i < 200; i++) {
+    const x = (i * 137) % 960, y = (i * 89) % 640;
+    ctx.fillRect(x, y, 4, 4);
+  }
+  ctx.fillStyle = '#c9b06a';
+  ctx.fillRect(460, 200, 40, 300);
+  ctx.fillStyle = '#4a90c9'; ctx.fillRect(780, 80, 120, 80);
+  ctx.fillStyle = '#5aa5dd'; ctx.fillRect(790, 90, 100, 60);
+  ctx.fillStyle = '#8a6a3a';
+  for (let x = 0; x < 960; x += 40) { ctx.fillRect(x, 600, 8, 24); }
+  ctx.fillRect(0, 604, 960, 6);
+}
+function nightOverlay() {
+  if (['closed','pre'].includes(S.session)) {
+    ctx.fillStyle = 'rgba(10,10,40,0.45)'; ctx.fillRect(0, 0, 960, 640);
+    ctx.fillStyle = '#fff';
+    for (let i = 0; i < 60; i++) ctx.fillRect((i*167)%960, (i*97)%300, 2, 2);
+    ctx.fillStyle = '#f5f0d0'; ctx.beginPath(); ctx.arc(850, 60, 24, 0, 7); ctx.fill();
+  }
+}
+function etClock() {
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York',
+      hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+  } catch(_) { return ''; }
+}
+function tick(t) {
+  Object.values(S.bots).forEach(b => {
+    if (b.tx !== null) {
+      const dx = b.tx - b.x, dy = b.ty - b.y, d = Math.hypot(dx, dy);
+      if (d < 4) { b.tx = null; b.ty = null; if (b.mood !== 'sad' && b.mood !== 'sleeping') b.mood = 'idle'; b.carrying = 0; }
+      else { b.x += dx/d*2.2; b.y += dy/d*2.2; }
+    } else if (Math.random() < 0.005) { b.tx = 80 + Math.random()*800; b.ty = 350 + Math.random()*220; }
+  });
+  coins = coins.filter(c => c.life-- > 0);
+  coins.forEach(c => { c.x += c.vx; c.y += c.vy; c.vy += 0.15; });
+  drawGrass(t);
+  const ids = Object.keys(S.bots);
+  ids.forEach((id, i) => drawField(i, S.bots[id].name.slice(0,8)));
+  drawFarmhouse();
+  const reserve = (S.treasury && S.treasury.reserve) || 0;
+  const pileH = Math.min(40, 4 + reserve / 500);
+  ctx.fillStyle = '#ffd75e';
+  ctx.beginPath(); ctx.ellipse(480, 218, 30, pileH/2, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = '#fff2b0'; ctx.beginPath(); ctx.ellipse(472, 214, 12, 4, 0, 0, 7); ctx.fill();
+  Object.values(S.bots).forEach(b => drawVillager(b, t));
+  coins.forEach(c => { ctx.fillStyle = '#ffd75e'; ctx.fillRect(c.x, c.y, 6, 6); });
+  nightOverlay();
+  ctx.fillStyle = '#f5e6c8'; ctx.font = '12px monospace'; ctx.textAlign = 'left';
+  ctx.fillText(etClock() + ' ET', 12, 24);
+  ctx.fillText('Session: ' + S.session, 12, 44);
+  requestAnimationFrame(tick);
+}
+
+// ===== Init =====
+document.getElementById('t-clock').textContent = etClock() + ' ET';
+setInterval(() => { document.getElementById('t-clock').textContent = etClock() + ' ET'; }, 15000);
+pollState();
+setInterval(pollState, POLL_MS);
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
