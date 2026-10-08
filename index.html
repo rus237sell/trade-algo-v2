@@ -2450,11 +2450,15 @@ function boot() {
     return r.json();
   }
   function synthStatus(st){
+    const total = (st.day_pnl_total!=null? st.day_pnl_total : st.day_pnl);
     return { type:'status', bot_id:'scalp-city', bot_name:'Scalp City',
       timestamp: st.time || new Date().toISOString(),
-      day_pnl: Number(st.day_pnl)||0, halted: !!st.halted,
+      day_pnl: Number(total)||0, halted: !!st.halted,
       positions: st.positions||[], data_lag_min: st.data_lag_min,
-      session: st.session || undefined };
+      session: st.session || undefined,
+      pnl_live: !!st.pnl_live,
+      unrealized_pnl: st.unrealized_pnl!=null? Number(st.unrealized_pnl) : 0,
+      equity_start: st.equity_start||null, equity_now: st.equity_now||null };
   }
   async function pollStatic(){
     try { const st = await getJSON('state.json'); dispatch(synthStatus(st), true); Data.conn='live'; }
