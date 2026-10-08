@@ -2464,6 +2464,11 @@ function boot() {
       const list = Array.isArray(ds) ? ds : (ds.decisions||[]);
       for(const d of list){ if(!d.type) d.type='decision'; dispatch(d, true); }
     } catch(e){}
+    try {
+      const tj = await getJSON('trades.json');
+      const tlist = Array.isArray(tj) ? tj : (tj.trades||[]);
+      for(const t of tlist){ if(!t.type) t.type='trade'; dispatch(t, true); }
+    } catch(e){}
     renderInbox(); UI.dirty = true;
   }
   Feed.connect = function(){ pollStatic(); setInterval(pollStatic, 30000); };
