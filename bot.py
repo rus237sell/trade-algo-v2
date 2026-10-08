@@ -121,8 +121,23 @@ class Bot:
         occ, strike = self._pick_occ(symbol, side, px, now.date())
         # Estimate premium for sizing log (live: use quote)
         premium = max(0.5, 0.5 * a)
-        self.broker.place(occ, side, qty, tag=f"v2:{reason}")
-        self.positions[symbol] = Position(occ, side, qty, premium, px, a)
+        # Real fill logging: capture the broker's fill price and the quote
+        # at decision time. Everything defensive — logging never breaks trading.
+        entry_fill, entry_bid, entry_ask = None, None, None
+        try:
+            order = self.broker.place(occ, side, qty, tag=f"v2:{reason}")
+            if isinstance(order, dict) and order.get("id") and hasattr(self.broker, "wait_fill"):
+                entry_fill, _ = self.broker.wait_fill(order["id"])
+        except Exception:
+            entry_fill = None
+        try:
+            if hasattr(self.data, "option_quote"):
+                entry_bid, entry_ask = self.data.option_quote(occ)
+        except Exception:
+            entry_bid, entry_ask = None, None
+        pos = Position(occ, side, qty, premium, px, a)
+        pos.entry_fill, pos.entry_bid, pos.entry_ask = entry_fill, entry_bid, entry_ask
+        self.positions[symbol] = pos
         self.cooldowns.mark(symbol, now)
         # Research tags for the trade dataset: never allowed to raise.
         try:
@@ -140,20 +155,46 @@ class Bot:
                     "price": round(float(premium), 2), "occ": occ,
                     "underlying_px": round(float(px), 2), "reason": reason,
                     "pnl_estimated": True,
+                    "entry_fill": entry_fill, "entry_bid": entry_bid, "entry_ask": entry_ask,
                     "time_et": time_et, "min_into_session": min_into_session,
                     "vwap_dist_pct": vwap_dist_pct, "atr": atr_val})
         print(f"ENTER {symbol} {side} {qty}x {occ} strike={strike} ({reason})")
 
     def _exit(self, symbol, pos, reason, px):
-        pnl = pos.est_pnl(px)
-        self.broker.close(pos.occ, pos.qty, tag=f"v2:{reason}")
-        self.guard.pnl += pnl
+        est = pos.est_pnl(px)
+        # Real fill for the closing order + quote at decision time.
+        exit_fill, exit_bid, exit_ask = None, None, None
+        try:
+            order = self.broker.close(pos.occ, pos.qty, tag=f"v2:{reason}")
+            if isinstance(order, dict) and order.get("id") and hasattr(self.broker, "wait_fill"):
+                exit_fill, _ = self.broker.wait_fill(order["id"])
+        except Exception:
+            exit_fill = None
+        try:
+            if hasattr(self.data, "option_quote"):
+                exit_bid, exit_ask = self.data.option_quote(pos.occ)
+        except Exception:
+            exit_bid, exit_ask = None, None
+        # Real P&L from broker fills (long options: sell - buy). Falls back
+        # to the estimate when a fill wasn't captured.
+        real = None
+        entry_fill = getattr(pos, "entry_fill", None)
+        if exit_fill is not None and entry_fill is not None:
+            real = round((exit_fill - entry_fill) * 100 * pos.qty, 2)
+        pnl_for_guard = real if real is not None else est
+        self.guard.pnl += pnl_for_guard
         del self.positions[symbol]
         emit_trade({"action": "close", "symbol": symbol, "side": pos.side, "qty": int(pos.qty),
                     "price": round(float(px), 2), "occ": pos.occ,
                     "underlying_px": round(float(px), 2), "reason": reason,
-                    "pnl": round(float(pnl), 2), "pnl_estimated": True})
-        print(f"EXIT {symbol} {pos.side} ({reason}) est_pnl={pnl:+.2f} day={self.guard.pnl:+.2f}")
+                    "pnl": real, "pnl_est": round(float(est), 2),
+                    "pnl_estimated": real is None,
+                    "entry_fill": entry_fill, "exit_fill": exit_fill,
+                    "entry_bid": getattr(pos, "entry_bid", None),
+                    "entry_ask": getattr(pos, "entry_ask", None),
+                    "exit_bid": exit_bid, "exit_ask": exit_ask})
+        rpnl = f"{real:+.2f}" if real is not None else "n/a"
+        print(f"EXIT {symbol} {pos.side} ({reason}) real_pnl={rpnl} est_pnl={est:+.2f} day={self.guard.pnl:+.2f}")
 
     def _save_state(self, now, session_state, max_lag_min, stale_data=False):
         """Write a small status file every cycle for status.py / monitoring."""

@@ -64,6 +64,24 @@ class AlpacaBroker:
     def close(self, occ, qty, tag):
         return self._order(occ, qty, "sell", tag)  # sell_to_close
 
+    def wait_fill(self, order_id, timeout=15):
+        """Poll an order until filled. Returns (filled_avg_price, filled_at)
+        or (None, None) on timeout/error. Never raises — trading must not
+        block forever on one fill."""
+        try:
+            import time as _t
+            deadline = _t.time() + timeout
+            while _t.time() < deadline:
+                r = requests.get(f"{PAPER_BASE}/v2/orders/{order_id}",
+                                 headers=self.auth.headers(), timeout=10)
+                o = r.json()
+                if o.get("status") == "filled" and o.get("filled_avg_price"):
+                    return float(o["filled_avg_price"]), o.get("filled_at")
+                _t.sleep(1)
+        except Exception:
+            pass
+        return None, None
+
     def positions(self):
         r = requests.get(f"{PAPER_BASE}/v2/positions",
                          headers=self.auth.headers(), timeout=15)
@@ -73,6 +91,19 @@ class AlpacaBroker:
 
 class AlpacaData:
     """Free tier bars: 15-min delayed + full history. Good for backtest."""
+
+    def option_quote(self, occ):
+        """Latest bid/ask for one option contract. Returns (bid, ask) or
+        (None, None) on any error. Never raises."""
+        try:
+            r = requests.get(f"{DATA_BASE}/v2/options/quotes/latest",
+                             params={"symbols": occ, "feed": "indicative"},
+                             headers=self.auth.headers(), timeout=10)
+            q = (r.json().get("quotes") or {}).get(occ) or {}
+            bid, ask = q.get("bp"), q.get("ap")
+            return (float(bid) if bid else None, float(ask) if ask else None)
+        except Exception:
+            return None, None
 
     def __init__(self, auth=None):
         self.auth = auth or AlpacaAuth()
