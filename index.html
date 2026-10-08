@@ -2440,7 +2440,7 @@ function boot() {
   else setInterval(() => Demo.treasury(), 5000);
   requestAnimationFrame(frame);
 }
-<script>
+
 /* ---- Static adapter: GitHub Pages has no WebSocket server, so poll the
    static JSON files the farm pushes and feed them through dispatch(). ---- */
 (function(){
@@ -2500,7 +2500,6 @@ function renderInbox(){
     box.appendChild(card);
   }
 }
-</script>
 document.addEventListener('DOMContentLoaded', boot);
 
 </script>
