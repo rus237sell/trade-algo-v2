@@ -1,10 +1,10 @@
 {
-  "time": "2026-10-09T10:08:21.717919-04:00",
+  "time": "2026-10-09T10:13:29.753289-04:00",
   "session": "open",
   "day_pnl": 0.0,
   "halted": false,
   "stale_data": false,
   "positions": [],
-  "data_lag_min": 1.4,
+  "data_lag_min": 1.5,
   "broker": "alpaca"
 }
