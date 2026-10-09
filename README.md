@@ -24,8 +24,10 @@ Paper-trade the Scalp City 0DTE scalping system: 1-min VWAP / 50-EMA / opening-r
 - Stop: `pkill -f trade-algo-v2/bot.py`
 - The bot warns in the log if market data is >5 min stale (free tier may be delayed — paper results then prove plumbing, not edge).
 - Fail-safe: if the freshest 1-min bar is older than 30 min (free tier runs ~15-min delayed), new entries are blocked until data recovers; exits and the 15:45 ET flatten still run. `stale_data` in state.json shows it.
+- Restart-safe: on startup the bot re-adopts open 0DTE positions from the broker (same-day expiry, strategy symbols only), so a crash or reboot can't orphan positions — ATR exits and the flatten still fire for them. Recovered legs carry a `recovered` flag in state.json.
 
 ## Versions
+- v2.6: startup position recovery — re-adopt today's open 0DTE legs from the broker at boot (ATR exits + EOD flatten cover them; entry unknown, measured from recovery price); TradierBroker.positions() added; broker outages during recovery never stop the bot.
 - v2.5: live paper monitoring — state.json heartbeat, status.py, run_live.sh launcher, data-staleness warning.
 - v2.4: backtest correctness fixes — regular-session bars only, VWAP/ORB reset daily, cooldown enforced between trades (the first run's -$116k was backtest bugs: extended-hours bars + cumulative VWAP + no cooldown, not the strategy).
 - v2.3: one-command droplet setup script; Alpaca connection checker.

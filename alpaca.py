@@ -8,24 +8,6 @@ Env: ALPACA_API_KEY, ALPACA_API_SECRET (paper keys from alpaca.markets)
 """
 import os
 import requests
-import pytz
-
-ET = pytz.timezone("America/New_York")
-
-
-def _utc_z(dt):
-    """Format a datetime as a UTC 'Z' string for the Alpaca API.
-
-    Callers pass ET wall-clock datetimes (bot.py) or naive datetimes
-    (fetch_history.py). The old code appended a literal "Z" to ET wall
-    time, shifting every request window -4h: `end` landed 4h in the
-    past, so the freshest bar was always ~240 min old and the bot
-    believed the feed was dead. Convert properly instead.
-    """
-    if dt.tzinfo is None:
-        dt = ET.localize(dt)
-    return dt.astimezone(pytz.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
 
 PAPER_BASE = "https://paper-api.alpaca.markets"
 DATA_BASE = "https://data.alpaca.markets"
@@ -64,34 +46,6 @@ class AlpacaBroker:
     def close(self, occ, qty, tag):
         return self._order(occ, qty, "sell", tag)  # sell_to_close
 
-    def account_equity(self):
-        """Current account equity. Returns float or None. Never raises."""
-        try:
-            r = requests.get(f"{PAPER_BASE}/v2/account",
-                             headers=self.auth.headers(), timeout=10)
-            eq = r.json().get("equity")
-            return float(eq) if eq else None
-        except Exception:
-            return None
-
-    def wait_fill(self, order_id, timeout=15):
-        """Poll an order until filled. Returns (filled_avg_price, filled_at)
-        or (None, None) on timeout/error. Never raises — trading must not
-        block forever on one fill."""
-        try:
-            import time as _t
-            deadline = _t.time() + timeout
-            while _t.time() < deadline:
-                r = requests.get(f"{PAPER_BASE}/v2/orders/{order_id}",
-                                 headers=self.auth.headers(), timeout=10)
-                o = r.json()
-                if o.get("status") == "filled" and o.get("filled_avg_price"):
-                    return float(o["filled_avg_price"]), o.get("filled_at")
-                _t.sleep(1)
-        except Exception:
-            pass
-        return None, None
-
     def positions(self):
         r = requests.get(f"{PAPER_BASE}/v2/positions",
                          headers=self.auth.headers(), timeout=15)
@@ -102,19 +56,6 @@ class AlpacaBroker:
 class AlpacaData:
     """Free tier bars: 15-min delayed + full history. Good for backtest."""
 
-    def option_quote(self, occ):
-        """Latest bid/ask for one option contract. Returns (bid, ask) or
-        (None, None) on any error. Never raises."""
-        try:
-            r = requests.get(f"{DATA_BASE}/v2/options/quotes/latest",
-                             params={"symbols": occ, "feed": "indicative"},
-                             headers=self.auth.headers(), timeout=10)
-            q = (r.json().get("quotes") or {}).get(occ) or {}
-            bid, ask = q.get("bp"), q.get("ap")
-            return (float(bid) if bid else None, float(ask) if ask else None)
-        except Exception:
-            return None, None
-
     def __init__(self, auth=None):
         self.auth = auth or AlpacaAuth()
 
@@ -124,10 +65,9 @@ class AlpacaData:
         bars, token = [], None
         while True:
             params = {"timeframe": "1Min",
-                      "start": _utc_z(start),
-                      "end": _utc_z(end),
-                      "limit": 10000, "adjustment": "raw",
-                      "feed": "iex"}  # free plan: IEX 15-min delayed only
+                      "start": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                      "end": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                      "limit": 10000, "adjustment": "raw"}
             if token:
                 params["page_token"] = token
             r = requests.get(f"{DATA_BASE}/v2/stocks/{symbol}/bars",

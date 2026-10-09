@@ -5,7 +5,6 @@ Usage:
     BROKER=tradier python bot.py   # Tradier sandbox paper trading
 """
 import os
-import re
 import time
 import json
 from datetime import datetime, time as dtime
@@ -16,40 +15,11 @@ import pytz
 from config import Config
 from data import TradierData
 from alpaca import AlpacaData, AlpacaBroker
-from signals import check_signals, atr, vwap
+from signals import check_signals, atr
 from risk import DailyGuard, Cooldowns, Position, contracts_for_risk
-from broker import DryRunBroker, TradierBroker, occ_symbol
+from broker import DryRunBroker, TradierBroker, occ_symbol, parse_occ
 
 ET = pytz.timezone("America/New_York")
-
-# OCC option symbols look like IWM261005C00281000 (underlying + YYMMDD + C/P
-# + 8-digit strike). Anything not matching is a stock/ETF — the sweeps below
-# never touch those.
-_OCC_RE = re.compile(r"^([A-Z]{1,6})(\d{6})([CP])(\d{8})$")
-
-
-def _is_option_symbol(sym):
-    return bool(_OCC_RE.match(sym or ""))
-
-
-def _occ_parts(sym):
-    m = _OCC_RE.match(sym or "")
-    if not m:
-        return None
-    return {"underlying": m.group(1),
-            "side": "CALL" if m.group(3) == "C" else "PUT"}
-
-
-def emit_trade(rec):
-    """Append one trade event (JSONL) for the dashboard feed. Never raises."""
-    try:
-        rec = {"type": "trade", "bot_id": "scalp-city", "bot_name": "Scalp City",
-               "timestamp": datetime.now(ET).isoformat(), **rec}
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trades.jsonl")
-        with open(path, "a") as f:
-            f.write(json.dumps(rec) + "\n")
-    except Exception:
-        pass
 
 
 def parse_t(s):
@@ -89,39 +59,45 @@ class Bot:
         self.positions = {}  # symbol -> Position
         self._last_lag_warn = None
         self._last_stale_warn = None
-        self._last_sweep = None  # last broker-level option sweep (flatten)
-        # Real-P&L bookkeeping
-        self.equity_start = None   # equity at first cycle of the day
-        self._pnl_day = None       # day the counters below belong to
-        self._est_closes = 0       # closes today that fell back to estimated P&L
+        self._recover_positions()
 
-    def _pnl_snapshot(self, now):
-        """Real P&L components for the dashboard. Never raises; anything
-        that can't be measured comes back None and the UI marks it estimated."""
-        if self._pnl_day != now.date():
-            self._pnl_day, self._est_closes = now.date(), 0
-        snap = {"unrealized": None, "equity_start": self.equity_start,
-                "equity_now": None}
+    def _recover_positions(self):
+        """Re-adopt open 0DTE positions after a restart so ATR exits and the
+        EOD flatten still cover them. Only today's-expiry long option legs
+        on strategy symbols are recovered; expired leftovers are ignored.
+        A broker outage here must never stop the bot, so errors are logged
+        and swallowed."""
+        now = datetime.now(ET)
+        if now.weekday() >= 5:
+            return
+        today = now.strftime("%y%m%d")
         try:
-            if hasattr(self.broker, "account_equity"):
-                if self.equity_start is None:
-                    self.equity_start = self.broker.account_equity()
-                snap["equity_start"] = self.equity_start
-                snap["equity_now"] = self.broker.account_equity()
-            if not self.positions:
-                snap["unrealized"] = 0.0
-            elif hasattr(self.data, "option_quote"):
-                total, ok = 0.0, False
-                for pos in self.positions.values():
-                    bid, _ = self.data.option_quote(pos.occ)
-                    base = getattr(pos, "entry_fill", None) or pos.entry_premium
-                    if bid is not None and base:
-                        total += (bid - base) * 100 * pos.qty
-                        ok = True
-                snap["unrealized"] = round(total, 2) if ok else None
-        except Exception:
-            pass
-        return snap
+            open_pos = self.broker.positions()
+        except Exception as e:
+            print(f"position recovery skipped (broker error): {e}")
+            return
+        for p in open_pos:
+            occ = p.get("occ") or p.get("symbol", "")
+            try:
+                root, yymmdd, cp, _strike = parse_occ(occ)
+            except ValueError:
+                continue  # stock positions / non-OCC legs: not ours
+            qty = int(float(p.get("qty", 0)))
+            if (root not in self.cfg.symbols or yymmdd != today
+                    or qty <= 0 or p.get("side", "long") != "long"):
+                continue  # expired contracts, shorts, or other books
+            df = self._day_bars(root, now)
+            if df is None or len(df) < self.cfg.atr_period:
+                continue
+            px = float(df["close"].iloc[-1])
+            a = float(atr(df, self.cfg.atr_period).iloc[-1])
+            pos = Position(occ, "CALL" if cp == "C" else "PUT",
+                           qty, None, px, a)
+            pos.recovered = True
+            self.positions[root] = pos
+            self.cooldowns.mark(root, now)  # settle before re-entering
+            print(f"RECOVERED {root} {pos.side} {qty}x {occ} "
+                  f"(entry unknown after restart; exits measured from {px:.2f})")
 
     def _session_state(self, now):
         if now.weekday() >= 5:
@@ -172,204 +148,32 @@ class Bot:
         occ, strike = self._pick_occ(symbol, side, px, now.date())
         # Estimate premium for sizing log (live: use quote)
         premium = max(0.5, 0.5 * a)
-        # Real fill logging: capture the broker's fill price and the quote
-        # at decision time. Everything defensive — logging never breaks trading.
-        entry_fill, entry_bid, entry_ask = None, None, None
-        try:
-            order = self.broker.place(occ, side, qty, tag=f"v2:{reason}")
-            if isinstance(order, dict) and order.get("id") and hasattr(self.broker, "wait_fill"):
-                entry_fill, _ = self.broker.wait_fill(order["id"])
-        except Exception:
-            entry_fill = None
-        try:
-            if hasattr(self.data, "option_quote"):
-                entry_bid, entry_ask = self.data.option_quote(occ)
-        except Exception:
-            entry_bid, entry_ask = None, None
-        pos = Position(occ, side, qty, premium, px, a)
-        pos.entry_fill, pos.entry_bid, pos.entry_ask = entry_fill, entry_bid, entry_ask
-        self.positions[symbol] = pos
+        self.broker.place(occ, side, qty, tag=f"v2:{reason}")
+        self.positions[symbol] = Position(occ, side, qty, premium, px, a)
         self.cooldowns.mark(symbol, now)
-        # Research tags for the trade dataset: never allowed to raise.
-        try:
-            et_now = now.astimezone(ET)
-            time_et = et_now.strftime("%H:%M")
-            open_et = et_now.replace(hour=9, minute=30, second=0, microsecond=0)
-            min_into_session = int((et_now - open_et).total_seconds() // 60)
-            v = vwap(df).iloc[-1]
-            vwap_dist_pct = round(100.0 * (float(px) - float(v)) / float(px), 3) \
-                if px and v == v else None
-            atr_val = round(float(a), 2)
-        except Exception:
-            time_et, min_into_session, vwap_dist_pct, atr_val = None, None, None, None
-        emit_trade({"action": "open", "symbol": symbol, "side": side, "qty": int(qty),
-                    "price": round(float(premium), 2), "occ": occ,
-                    "underlying_px": round(float(px), 2), "reason": reason,
-                    "pnl_estimated": True,
-                    "entry_fill": entry_fill, "entry_bid": entry_bid, "entry_ask": entry_ask,
-                    "time_et": time_et, "min_into_session": min_into_session,
-                    "vwap_dist_pct": vwap_dist_pct, "atr": atr_val})
         print(f"ENTER {symbol} {side} {qty}x {occ} strike={strike} ({reason})")
 
     def _exit(self, symbol, pos, reason, px):
-        est = pos.est_pnl(px)
-        # Real fill for the closing order + quote at decision time.
-        exit_fill, exit_bid, exit_ask = None, None, None
-        try:
-            order = self.broker.close(pos.occ, pos.qty, tag=f"v2:{reason}")
-            if isinstance(order, dict) and order.get("id") and hasattr(self.broker, "wait_fill"):
-                exit_fill, _ = self.broker.wait_fill(order["id"])
-        except Exception:
-            exit_fill = None
-        try:
-            if hasattr(self.data, "option_quote"):
-                exit_bid, exit_ask = self.data.option_quote(pos.occ)
-        except Exception:
-            exit_bid, exit_ask = None, None
-        # Real P&L from broker fills (long options: sell - buy). Falls back
-        # to the estimate when a fill wasn't captured.
-        real = None
-        entry_fill = getattr(pos, "entry_fill", None)
-        if exit_fill is not None and entry_fill is not None:
-            real = round((exit_fill - entry_fill) * 100 * pos.qty, 2)
-        pnl_for_guard = real if real is not None else est
-        if real is None:
-            self._est_closes += 1
-        self.guard.pnl += pnl_for_guard
+        pnl = pos.est_pnl(px)
+        self.broker.close(pos.occ, pos.qty, tag=f"v2:{reason}")
+        self.guard.pnl += pnl
         del self.positions[symbol]
-        emit_trade({"action": "close", "symbol": symbol, "side": pos.side, "qty": int(pos.qty),
-                    "price": round(float(px), 2), "occ": pos.occ,
-                    "underlying_px": round(float(px), 2), "reason": reason,
-                    "pnl": real, "pnl_est": round(float(est), 2),
-                    "pnl_estimated": real is None,
-                    "entry_fill": entry_fill, "exit_fill": exit_fill,
-                    "entry_bid": getattr(pos, "entry_bid", None),
-                    "entry_ask": getattr(pos, "entry_ask", None),
-                    "exit_bid": exit_bid, "exit_ask": exit_ask})
-        rpnl = f"{real:+.2f}" if real is not None else "n/a"
-        print(f"EXIT {symbol} {pos.side} ({reason}) real_pnl={rpnl} est_pnl={est:+.2f} day={self.guard.pnl:+.2f}")
+        print(f"EXIT {symbol} {pos.side} ({reason}) est_pnl={pnl:+.2f} day={self.guard.pnl:+.2f}")
 
-    def _sync_positions_from_broker(self, now):
-        """Recover open option positions from the broker at startup.
-
-        After a crash/restart the in-memory book is empty; without this, an
-        open 0DTE position would have no stop, never flatten, and could be
-        auto-exercised into shares (this is how the 600 IWM shares happened
-        on 2026-10-05). Recovered positions are treated as entered now at
-        the current underlying price with current ATR. Never raises; on any
-        failure the bot just starts with an empty book and the EOD sweep
-        still closes everything broker-side.
-        """
-        try:
-            if not isinstance(self.broker, AlpacaBroker):
-                return
-            for p in self.broker.positions():
-                sym = p.get("symbol", "")
-                parts = _occ_parts(sym)
-                if not parts or parts["underlying"] not in self.cfg.symbols:
-                    continue  # not an option, or not one of our symbols
-                if parts["underlying"] in self.positions:
-                    continue
-                try:
-                    qty = int(float(p.get("qty") or 0))
-                except (TypeError, ValueError):
-                    continue
-                if qty <= 0:
-                    continue  # we never short options; leave shorts alone
-                try:
-                    entry = float(p.get("avg_entry_price") or 0) or None
-                except (TypeError, ValueError):
-                    entry = None
-                # Current underlying price + ATR so stop/target behave like
-                # a fresh position. If bars are unavailable, skip — the EOD
-                # sweep still closes it broker-side.
-                try:
-                    df = self._day_bars(parts["underlying"], now)
-                    px = float(df["close"].iloc[-1])
-                    a = float(atr(df, self.cfg.atr_period).iloc[-1])
-                except Exception:
-                    print(f"RECOVER-SKIP {sym}: no bars for ATR")
-                    continue
-                pos = Position(sym, parts["side"], qty,
-                               entry if entry else max(0.5, 0.5 * a),
-                               px, a)
-                pos.recovered = True
-                self.positions[parts["underlying"]] = pos
-                print(f"RECOVERED {parts['underlying']} {parts['side']} "
-                      f"{qty}x {sym} (entry~{entry})")
-        except Exception as e:
-            print(f"position sync failed: {e}")
-
-    def _broker_sweep_options(self, reason):
-        """Close every option position the broker reports, not just the
-        ones in memory. Backstop against positions orphaned by restarts.
-        Never touches stock/ETF positions. Returns the set of option OCC
-        symbols still open at the broker afterwards. Never raises."""
-        if not isinstance(self.broker, AlpacaBroker):
-            return set()
-        try:
-            for p in self.broker.positions():
-                sym = p.get("symbol", "")
-                if not _is_option_symbol(sym):
-                    continue
-                try:
-                    qty = int(float(p.get("qty") or 0))
-                except (TypeError, ValueError):
-                    continue
-                if qty <= 0:
-                    continue
-                try:
-                    self.broker.close(sym, qty, tag=f"v2:{reason}"[:48])
-                    print(f"SWEEP-CLOSE {sym} {qty}x ({reason})")
-                    parts = _occ_parts(sym)
-                    emit_trade({"action": "close",
-                                "symbol": parts["underlying"] if parts else sym,
-                                "side": parts["side"] if parts else "?",
-                                "qty": qty, "occ": sym, "reason": reason,
-                                "pnl_estimated": True, "swept": True})
-                except Exception as e:
-                    print(f"sweep close failed {sym}: {e}")
-        except Exception as e:
-            print(f"broker sweep failed: {e}")
-        # Re-read: whatever is still open stays tracked for the next sweep.
-        # (Zero-qty ghosts are ignored — nothing to close.)
-        try:
-            out = set()
-            for p in self.broker.positions():
-                sym = p.get("symbol", "")
-                if not _is_option_symbol(sym):
-                    continue
-                try:
-                    if int(float(p.get("qty") or 0)) > 0:
-                        out.add(sym)
-                except (TypeError, ValueError):
-                    continue
-            return out
-        except Exception:
-            return set()
-
-    def _save_state(self, now, session_state, max_lag_min, stale_data=False, snap=None):
+    def _save_state(self, now, session_state, max_lag_min, stale_data=False):
         """Write a small status file every cycle for status.py / monitoring."""
-        snap = snap or {}
-        unreal = snap.get("unrealized")
-        day_pnl = float(round(self.guard.pnl, 2))
         state = {
             "time": now.isoformat(),
             "session": session_state,
             # float()/bool(): guard math can hold numpy scalars (est_pnl runs on
             # pandas floats), which json can't serialize — coerce here so the
             # state file never gets truncated mid-write.
-            "day_pnl": day_pnl,  # realized today (real fills when captured)
-            "unrealized_pnl": unreal,  # open positions at live bids (None = unknown)
-            "day_pnl_total": round(day_pnl + (unreal or 0), 2),
-            # pnl_live: every number on screen is real — no estimates involved.
-            "pnl_live": bool(unreal is not None and self._est_closes == 0),
-            "equity_start": snap.get("equity_start"),
-            "equity_now": snap.get("equity_now"),
+            "day_pnl": float(round(self.guard.pnl, 2)),
             "halted": bool(self.guard.halted()),
             "stale_data": stale_data,  # fail-safe: entries blocked on dead feed
             "positions": [
-                {"symbol": s, "side": p.side, "qty": p.qty, "occ": p.occ}
+                {"symbol": s, "side": p.side, "qty": p.qty, "occ": p.occ,
+                 "recovered": bool(getattr(p, "recovered", False))}
                 for s, p in self.positions.items()
             ],
             "data_lag_min": round(max_lag_min, 1) if max_lag_min is not None else None,
@@ -407,31 +211,17 @@ class Bot:
         now = datetime.now(ET)
         self.guard.reset_if_new_day(now)
         state = self._session_state(now)
-        snap = self._pnl_snapshot(now)
 
         if state == "flatten":
             for sym, pos in list(self.positions.items()):
                 df = self._day_bars(sym, now)
                 px = df["close"].iloc[-1] if df is not None else pos.underlying_entry
                 self._exit(sym, pos, "flatten-eod", px)
-            # Broker-level sweep (throttled): close any option position the
-            # broker reports that isn't in memory — e.g., orphaned by a
-            # restart. Runs through 13:00 PT expiry, so the 12:50 PT
-            # backstop is covered here too. Never touches stock positions.
-            if (self._last_sweep is None
-                    or (now - self._last_sweep).total_seconds() > 300):
-                self._last_sweep = now
-                open_occs = self._broker_sweep_options("flatten-eod-sweep")
-                # Drop in-memory entries the broker no longer shows as open
-                # (their P&L was already counted by _exit above).
-                for sym in list(self.positions.keys()):
-                    if self.positions[sym].occ not in open_occs:
-                        del self.positions[sym]
-            self._save_state(now, state, None, snap=snap)
+            self._save_state(now, state, None)
             return
 
         if state in ("closed", "pre"):
-            self._save_state(now, state, None, snap=snap)
+            self._save_state(now, state, None)
             return
 
         # Fetch today's bars once per symbol, measure data lag first so a
@@ -476,16 +266,10 @@ class Bot:
                 self._enter(symbol, side, reason, df, now)
                 break  # one entry per symbol per cycle
 
-        self._save_state(now, state, max_lag, stale_data=stale, snap=snap)
+        self._save_state(now, state, max_lag, stale_data=stale)
 
     def run(self):
         print("trade-algo-v2 running. Ctrl+C to stop.")
-        # Recover any open option positions from the broker (e.g., after a
-        # crash/restart) so they get stops, flatten, and dashboard tracking.
-        try:
-            self._sync_positions_from_broker(datetime.now(ET))
-        except Exception as e:
-            print(f"startup sync failed: {e}")
         while True:
             try:
                 self.cycle()
