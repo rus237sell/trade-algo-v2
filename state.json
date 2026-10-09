@@ -1,17 +1,10 @@
 {
-  "time": "2026-10-09T10:27:53.084422-04:00",
+  "time": "2026-10-09T10:34:05.171603-04:00",
   "session": "open",
-  "day_pnl": 0.0,
-  "halted": false,
+  "day_pnl": -1204.0,
+  "halted": true,
   "stale_data": false,
-  "positions": [
-    {
-      "symbol": "IWM",
-      "side": "CALL",
-      "qty": 34,
-      "occ": "IWM261009C00279000"
-    }
-  ],
-  "data_lag_min": 1.9,
+  "positions": [],
+  "data_lag_min": 1.1,
   "broker": "alpaca"
 }
