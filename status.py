@@ -5,13 +5,16 @@ Paste the output in chat for a human-readable read.
 """
 import json
 import os
+from datetime import datetime
 
+import pytz
 import requests
 
 from alpaca import AlpacaAuth
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PAPER = "https://paper-api.alpaca.markets"
+ET = pytz.timezone("America/New_York")
 
 print("== BOT ==")
 try:
@@ -26,6 +29,39 @@ try:
         print("  no open bot positions")
 except FileNotFoundError:
     print("bot has not written state yet (not running?)")
+
+print("== TRADES TODAY (local ledger) ==")
+today = datetime.now(ET).date().isoformat()
+entries = exits = 0
+net = 0.0
+reasons = {}
+try:
+    with open(os.path.join(BASE, "trades.jsonl")) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                t = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not str(t.get("time", "")).startswith(today):
+                continue
+            if t.get("event") == "entry":
+                entries += 1
+            elif t.get("event") == "exit":
+                exits += 1
+                net += float(t.get("est_pnl") or 0)
+                r = t.get("reason", "?")
+                reasons[r] = reasons.get(r, 0) + 1
+    print(f"{entries} entries / {exits} exits | net est pnl {net:+.2f}")
+    if reasons:
+        print("  exits by reason: " + ", ".join(
+            f"{r}x{n}" for r, n in sorted(reasons.items())))
+    if entries + exits == 0:
+        print("  no ledger entries today")
+except FileNotFoundError:
+    print("no trades logged yet")
 
 print("== ALPACA PAPER ==")
 auth = AlpacaAuth()

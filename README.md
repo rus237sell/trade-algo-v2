@@ -27,6 +27,7 @@ Paper-trade the Scalp City 0DTE scalping system: 1-min VWAP / 50-EMA / opening-r
 - Restart-safe: on startup the bot re-adopts open 0DTE positions from the broker (same-day expiry, strategy symbols only), so a crash or reboot can't orphan positions — ATR exits and the flatten still fire for them. Recovered legs carry a `recovered` flag in state.json.
 
 ## Versions
+- v2.7: trade ledger — append-only trades.jsonl records every entry and exit (time, symbol, OCC, qty, reason, est P&L, running day P&L) so a day's trading can be reviewed or reconciled against broker fills; status.py prints today's entries/exits, net est P&L, and exits by reason.
 - v2.6: startup position recovery — re-adopt today's open 0DTE legs from the broker at boot (ATR exits + EOD flatten cover them; entry unknown, measured from recovery price); TradierBroker.positions() added; broker outages during recovery never stop the bot.
 - v2.5: live paper monitoring — state.json heartbeat, status.py, run_live.sh launcher, data-staleness warning.
 - v2.4: backtest correctness fixes — regular-session bars only, VWAP/ORB reset daily, cooldown enforced between trades (the first run's -$116k was backtest bugs: extended-hours bars + cumulative VWAP + no cooldown, not the strategy).

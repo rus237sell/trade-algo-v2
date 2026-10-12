@@ -61,6 +61,23 @@ class Bot:
         self._last_stale_warn = None
         self._recover_positions()
 
+    def _ledger_path(self):
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "trades.jsonl")
+
+    def _log_trade(self, record):
+        """Append one JSON line to trades.jsonl — an append-only ledger of
+        every entry and exit (estimates, not broker fills), so a day's
+        trading can be reviewed or reconciled against the broker after the
+        fact. Ledger is monitoring-only: failures here never stop the bot."""
+        record = dict(record)
+        record.setdefault("time", datetime.now(ET).isoformat())
+        try:
+            with open(self._ledger_path(), "a") as f:
+                f.write(json.dumps(record, default=str) + "\n")
+        except Exception:
+            pass
+
     def _recover_positions(self):
         """Re-adopt open 0DTE positions after a restart so ATR exits and the
         EOD flatten still cover them. Only today's-expiry long option legs
@@ -92,8 +109,7 @@ class Bot:
             px = float(df["close"].iloc[-1])
             a = float(atr(df, self.cfg.atr_period).iloc[-1])
             pos = Position(occ, "CALL" if cp == "C" else "PUT",
-                           qty, None, px, a)
-            pos.recovered = True
+                           qty, None, px, a, recovered=True)
             self.positions[root] = pos
             self.cooldowns.mark(root, now)  # settle before re-entering
             print(f"RECOVERED {root} {pos.side} {qty}x {occ} "
@@ -151,12 +167,22 @@ class Bot:
         self.broker.place(occ, side, qty, tag=f"v2:{reason}")
         self.positions[symbol] = Position(occ, side, qty, premium, px, a)
         self.cooldowns.mark(symbol, now)
+        self._log_trade({"event": "entry", "symbol": symbol, "side": side,
+                         "qty": qty, "occ": occ, "strike": strike,
+                         "reason": reason, "underlying_px": float(px),
+                         "atr": float(a), "est_premium": float(premium)})
         print(f"ENTER {symbol} {side} {qty}x {occ} strike={strike} ({reason})")
 
     def _exit(self, symbol, pos, reason, px):
         pnl = pos.est_pnl(px)
         self.broker.close(pos.occ, pos.qty, tag=f"v2:{reason}")
         self.guard.pnl += pnl
+        self._log_trade({"event": "exit", "symbol": symbol, "side": pos.side,
+                         "qty": pos.qty, "occ": pos.occ, "reason": reason,
+                         "underlying_px": float(px),
+                         "est_pnl": float(round(pnl, 2)),
+                         "day_pnl": float(round(self.guard.pnl, 2)),
+                         "recovered": bool(pos.recovered)})
         del self.positions[symbol]
         print(f"EXIT {symbol} {pos.side} ({reason}) est_pnl={pnl:+.2f} day={self.guard.pnl:+.2f}")
 

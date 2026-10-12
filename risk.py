@@ -41,13 +41,15 @@ class Cooldowns:
 
 
 class Position:
-    def __init__(self, occ, side, qty, entry_premium, underlying_entry, atr):
+    def __init__(self, occ, side, qty, entry_premium, underlying_entry, atr,
+                 recovered=False):
         self.occ = occ
         self.side = side  # CALL or PUT
         self.qty = qty
         self.entry_premium = entry_premium
         self.underlying_entry = underlying_entry
         self.atr = atr
+        self.recovered = recovered  # re-adopted from broker after a restart
 
     def exit_reason(self, underlying_now, cfg):
         d = 1 if self.side == "CALL" else -1
