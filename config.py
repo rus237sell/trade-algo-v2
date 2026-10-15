@@ -11,8 +11,8 @@ class Config:
 
     # Risk
     risk_per_trade: float = 313.0      # $ risked per trade (quarter size)
-    daily_profit_target: float = 2000.0  # halt all trading for the day here
-    max_daily_loss: float = -3500.0      # hard stop for the day
+    daily_profit_target: float = 500.0  # halt all trading for the day here
+    max_daily_loss: float = -1000.0      # hard stop for the day
 
     # Strategy (1-minute bars)
     orb_minutes: int = 15               # opening-range window

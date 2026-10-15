@@ -20,13 +20,14 @@ Paper-trade the Scalp City 0DTE scalping system: 1-min VWAP / 50-EMA / opening-r
 ## Live paper trading
 - On the droplet: `bash ~/trade-algo-v2/deploy/run_live.sh` (needs ALPACA_API_KEY/SECRET exported; pulls latest code, runs in background, logs to live.log).
 - Watch: `tail -f ~/trade-algo-v2/live.log`
-- Status anytime: `~/trade-algo-v2/.venv/bin/python ~/trade-algo-v2/status.py` — bot state + Alpaca paper equity/positions/recent fills. Paste it in chat for a read.
+- Status anytime: `~/trade-algo-v2/.venv/bin/python ~/trade-algo-v2/status.py` — bot state + Alpaca paper equity/positions/recent fills + ledger-vs-fill reconciliation. Paste it in chat for a read.
 - Stop: `pkill -f trade-algo-v2/bot.py`
 - The bot warns in the log if market data is >5 min stale (free tier may be delayed — paper results then prove plumbing, not edge).
 - Fail-safe: if the freshest 1-min bar is older than 30 min (free tier runs ~15-min delayed), new entries are blocked until data recovers; exits and the 15:45 ET flatten still run. `stale_data` in state.json shows it.
 - Restart-safe: on startup the bot re-adopts open 0DTE positions from the broker (same-day expiry, strategy symbols only), so a crash or reboot can't orphan positions — ATR exits and the flatten still fire for them. Recovered legs carry a `recovered` flag in state.json.
 
 ## Versions
+- v2.8: ledger-vs-broker reconciliation — status.py pairs Alpaca buy/sell fills FIFO per contract (reconcile.py) and prints today's realized fill P&L next to the ledger's estimated P&L, flagging divergence over $25 and sells it could not pair with a fetched buy. Reporting only; the daily guard still runs on estimates.
 - v2.7: trade ledger — append-only trades.jsonl records every entry and exit (time, symbol, OCC, qty, reason, est P&L, running day P&L) so a day's trading can be reviewed or reconciled against broker fills; status.py prints today's entries/exits, net est P&L, and exits by reason.
 - v2.6: startup position recovery — re-adopt today's open 0DTE legs from the broker at boot (ATR exits + EOD flatten cover them; entry unknown, measured from recovery price); TradierBroker.positions() added; broker outages during recovery never stop the bot.
 - v2.5: live paper monitoring — state.json heartbeat, status.py, run_live.sh launcher, data-staleness warning.
