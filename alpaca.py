@@ -8,6 +8,19 @@ Env: ALPACA_API_KEY, ALPACA_API_SECRET (paper keys from alpaca.markets)
 """
 import os
 import requests
+import pytz
+
+ET = pytz.timezone("America/New_York")
+
+
+def _utc_z(dt):
+    """Format a datetime as a true UTC 'Z' string for the Alpaca API.
+    Callers pass ET wall-clock datetimes; appending a literal 'Z' to ET
+    time shifts the window -4h, so the freshest bar is always ~240 min
+    old and the fail-safe blocks every entry. Convert properly."""
+    if dt.tzinfo is None:
+        dt = ET.localize(dt)
+    return dt.astimezone(pytz.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 PAPER_BASE = "https://paper-api.alpaca.markets"
 DATA_BASE = "https://data.alpaca.markets"
@@ -65,8 +78,8 @@ class AlpacaData:
         bars, token = [], None
         while True:
             params = {"timeframe": "1Min",
-                      "start": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                      "end": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                      "start": _utc_z(start),
+                      "end": _utc_z(end),
                       "limit": 10000, "adjustment": "raw"}
             if token:
                 params["page_token"] = token
