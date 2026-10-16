@@ -1,5 +1,5 @@
 {
-  "time": "2026-10-16T12:34:25.927845-04:00",
+  "time": "2026-10-16T12:38:35.058432-04:00",
   "session": "open",
   "day_pnl": 0.0,
   "halted": false,
@@ -13,6 +13,6 @@
       "recovered": true
     }
   ],
-  "data_lag_min": 16.4,
+  "data_lag_min": 16.6,
   "broker": "alpaca"
 }
