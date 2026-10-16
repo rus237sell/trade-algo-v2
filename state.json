@@ -1,7 +1,7 @@
 {
-  "time": "2026-10-16T14:08:45.205055-04:00",
+  "time": "2026-10-16T14:13:57.866787-04:00",
   "session": "open",
-  "day_pnl": -14.5,
+  "day_pnl": 460.01,
   "halted": false,
   "stale_data": false,
   "positions": [
@@ -11,15 +11,8 @@
       "qty": 8,
       "occ": "QQQ261016P00655000",
       "recovered": true
-    },
-    {
-      "symbol": "SPY",
-      "side": "PUT",
-      "qty": 13,
-      "occ": "SPY261016P00764000",
-      "recovered": false
     }
   ],
-  "data_lag_min": 16.8,
+  "data_lag_min": 17.0,
   "broker": "alpaca"
 }
