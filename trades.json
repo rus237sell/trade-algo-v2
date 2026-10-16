@@ -1,1 +1,41 @@
-[{"event": "entry", "symbol": "QQQ", "side": "PUT", "qty": 8, "occ": "QQQ261016P00655000", "strike": 655.0, "reason": "orb-breakdown-dn", "underlying_px": 721.0, "atr": 0.7274071428571298, "est_premium": 0.5, "time": "2026-10-16T10:37:05.282516-04:00"}, {"event": "exit", "symbol": "QQQ", "side": "PUT", "qty": 8, "occ": "QQQ261016P00655000", "reason": "atr-target", "underlying_px": 716.14, "est_pnl": 372.0, "day_pnl": 372.0, "recovered": true, "time": "2026-10-16T12:49:09.505158-04:00"}, {"event": "exit", "symbol": "IWM", "side": "PUT", "qty": 1, "occ": "IWM261016P00260000", "reason": "atr-target", "underlying_px": 271.2399, "est_pnl": 17.5, "day_pnl": 17.5, "recovered": true, "time": "2026-10-16T13:09:44.664067-04:00"}]
+[
+  {
+    "event": "entry",
+    "symbol": "QQQ",
+    "side": "PUT",
+    "qty": 8,
+    "occ": "QQQ261016P00655000",
+    "strike": 655.0,
+    "reason": "orb-breakdown-dn",
+    "underlying_px": 721.0,
+    "atr": 0.7274071428571298,
+    "est_premium": 0.5,
+    "time": "2026-10-16T10:37:05.282516-04:00"
+  },
+  {
+    "event": "exit",
+    "symbol": "QQQ",
+    "side": "PUT",
+    "qty": 8,
+    "occ": "QQQ261016P00655000",
+    "reason": "atr-target",
+    "underlying_px": 716.14,
+    "est_pnl": 372.0,
+    "day_pnl": 372.0,
+    "recovered": true,
+    "time": "2026-10-16T12:49:09.505158-04:00"
+  },
+  {
+    "event": "exit",
+    "symbol": "IWM",
+    "side": "PUT",
+    "qty": 1,
+    "occ": "IWM261016P00260000",
+    "reason": "atr-target",
+    "underlying_px": 271.2399,
+    "est_pnl": 17.5,
+    "day_pnl": 17.5,
+    "recovered": true,
+    "time": "2026-10-16T13:09:44.664067-04:00"
+  }
+]
