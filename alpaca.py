@@ -51,17 +51,22 @@ class AlpacaBroker:
         if self.auth.dry:
             raise RuntimeError("ALPACA_API_KEY and ALPACA_API_SECRET are required")
 
-    def _order(self, occ, qty, side, tag):
+    def _order(self, occ, qty, side, tag, limit_price=None):
         # client_order_id must be unique per order on the account: Alpaca
         # rejects a reused id with 422. Bare reason tags ("v2:atr-stop")
         # collide with orders from earlier sessions, which wedged every
         # exit retry. Suffix a short unique id per submission instead.
         cid = f"{tag}:{uuid.uuid4().hex[:8]}"[:48]
-        r = requests.post(f"{PAPER_BASE}/v2/orders", json={
+        payload = {
             "symbol": occ, "qty": qty, "side": side,
-            "type": "market", "time_in_force": "day",
+            "type": "limit" if limit_price is not None else "market",
+            "time_in_force": "day",
             "client_order_id": cid,
-        }, headers=self.auth.headers(), timeout=15)
+        }
+        if limit_price is not None:
+            payload["limit_price"] = str(limit_price)
+        r = requests.post(f"{PAPER_BASE}/v2/orders", json=payload,
+                          headers=self.auth.headers(), timeout=15)
         r.raise_for_status()
         return r.json()
 
@@ -69,7 +74,20 @@ class AlpacaBroker:
         return self._order(occ, qty, "buy", tag)  # buy_to_open
 
     def close(self, occ, qty, tag):
-        return self._order(occ, qty, "sell", tag)  # sell_to_close
+        try:
+            return self._order(occ, qty, "sell", tag)  # sell_to_close
+        except requests.HTTPError as e:
+            # Alpaca rejects a MARKET sell when the contract has no
+            # available quote (403, code 40310000: "please reenter with
+            # a limit") — exactly what happens to a 0DTE contract that
+            # travelled far OTM. Its own remedy is a limit order: retry
+            # once at the $0.01 floor so the exit exists instead of
+            # retrying a doomed market order every cycle.
+            body = e.response.text if e.response is not None else ""
+            if e.response is not None and e.response.status_code == 403 \
+                    and "no available quote" in body:
+                return self._order(occ, qty, "sell", tag, limit_price=0.01)
+            raise
 
     def positions(self):
         r = requests.get(f"{PAPER_BASE}/v2/positions",
@@ -118,14 +136,35 @@ class AlpacaData:
         return bars
 
     def option_contracts(self, underlying, exp_date, cp):
-        """0DTE chain for one expiration (cp: 'call' or 'put')."""
+        """0DTE chain for one expiration (cp: 'call' or 'put').
+
+        The endpoint paginates (100 contracts per page, strikes
+        ascending). Reading only the first page truncates the chain
+        far below the money on QQQ/SPY — strike selection then lands
+        on the page boundary (a 655 put with QQQ at 721). Follow
+        next_page_token to the end of the chain.
+        """
         if self.auth.dry:
             return []
-        r = requests.get(f"{PAPER_BASE}/v2/options/contracts", params={
-            "underlying_symbols": underlying,
-            "expiration_date_gte": exp_date, "expiration_date_lte": exp_date,
-            "type": cp,
-        }, headers=self.auth.headers(), timeout=15)
-        r.raise_for_status()
-        contracts = r.json().get("option_contracts", [])
-        return contracts if isinstance(contracts, list) else []
+        contracts, token = [], None
+        while True:
+            params = {
+                "underlying_symbols": underlying,
+                "expiration_date_gte": exp_date,
+                "expiration_date_lte": exp_date,
+                "type": cp, "limit": 100,
+            }
+            if token:
+                params["page_token"] = token
+            r = requests.get(f"{PAPER_BASE}/v2/options/contracts",
+                             params=params, headers=self.auth.headers(),
+                             timeout=15)
+            r.raise_for_status()
+            body = r.json()
+            page = body.get("option_contracts", [])
+            if isinstance(page, list):
+                contracts.extend(page)
+            token = body.get("next_page_token")
+            if not token:
+                break
+        return contracts
