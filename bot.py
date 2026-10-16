@@ -164,7 +164,19 @@ class Bot:
         occ, strike = self._pick_occ(symbol, side, px, now.date())
         # Estimate premium for sizing log (live: use quote)
         premium = max(0.5, 0.5 * a)
-        self.broker.place(occ, side, qty, tag=f"v2:{reason}")
+        # client_order_id must be unique per order intent: a reason-only
+        # tag collides with any earlier order that used it (e.g. an
+        # "atr-stop" exit from a previous day) and Alpaca rejects the
+        # order with 422. Symbol+reason+minute keeps a retry inside the
+        # same minute idempotent without burning the tag forever, and a
+        # rejected order must never abort the cycle, so log and skip.
+        try:
+            self.broker.place(
+                occ, side, qty,
+                tag=f"v2:{symbol}:{reason}:{now:%Y%m%d%H%M}")
+        except Exception as e:
+            print(f"ENTER FAILED {symbol} ({reason}): {e}")
+            return
         self.positions[symbol] = Position(occ, side, qty, premium, px, a)
         self.cooldowns.mark(symbol, now)
         self._log_trade({"event": "entry", "symbol": symbol, "side": side,
@@ -173,9 +185,18 @@ class Bot:
                          "atr": float(a), "est_premium": float(premium)})
         print(f"ENTER {symbol} {side} {qty}x {occ} strike={strike} ({reason})")
 
-    def _exit(self, symbol, pos, reason, px):
+    def _exit(self, symbol, pos, reason, px, now):
         pnl = pos.est_pnl(px)
-        self.broker.close(pos.occ, pos.qty, tag=f"v2:{reason}")
+        # Unique-per-intent tag (see _enter): contract+reason+minute.
+        # A rejected close logs and leaves the position in place for a
+        # retry instead of aborting the cycle and freezing the state.
+        try:
+            self.broker.close(
+                pos.occ, pos.qty,
+                tag=f"v2:exit:{pos.occ}:{reason}:{now:%H%M}")
+        except Exception as e:
+            print(f"EXIT FAILED {symbol} ({reason}): {e}")
+            return
         self.guard.pnl += pnl
         self._log_trade({"event": "exit", "symbol": symbol, "side": pos.side,
                          "qty": pos.qty, "occ": pos.occ, "reason": reason,
@@ -242,7 +263,7 @@ class Bot:
             for sym, pos in list(self.positions.items()):
                 df = self._day_bars(sym, now)
                 px = df["close"].iloc[-1] if df is not None else pos.underlying_entry
-                self._exit(sym, pos, "flatten-eod", px)
+                self._exit(sym, pos, "flatten-eod", px, now)
             self._save_state(now, state, None)
             return
 
@@ -255,7 +276,11 @@ class Bot:
         bars = {}
         lags = []
         for symbol in self.cfg.symbols:
-            df = self._day_bars(symbol, now)
+            try:
+                df = self._day_bars(symbol, now)
+            except Exception as e:
+                print(f"bars error ({symbol}): {e}")
+                continue
             if df is None or len(df) < 3:
                 continue
             bars[symbol] = df
@@ -273,7 +298,7 @@ class Bot:
                 pos = self.positions[symbol]
                 reason = pos.exit_reason(px, self.cfg)
                 if reason:
-                    self._exit(symbol, pos, reason, px)
+                    self._exit(symbol, pos, reason, px, now)
                 continue
 
             # Entries
