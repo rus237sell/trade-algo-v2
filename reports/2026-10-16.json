@@ -1,0 +1,78 @@
+{
+ "status": "final",
+ "generated_at": "2026-10-16T16:00:54.310962-04:00",
+ "source": "alpaca-fills",
+ "farm": {
+  "trades": 9,
+  "wins": 1,
+  "losses": 8,
+  "pnl": -4020.0,
+  "win_rate": 0.1111,
+  "avg_win": 222.0,
+  "avg_loss": 530.25,
+  "payoff": 0.4187,
+  "breakeven_win_rate": 0.7049,
+  "expectancy": -446.67,
+  "profit_factor": 0.0523,
+  "max_drawdown": null,
+  "avg_hold_min": null
+ },
+ "houses": {
+  "IWM": {
+   "trades": 5,
+   "wins": 0,
+   "losses": 5,
+   "pnl": -3284.0,
+   "win_rate": 0.0,
+   "avg_win": null,
+   "avg_loss": 656.8,
+   "payoff": null,
+   "breakeven_win_rate": null,
+   "expectancy": -656.8,
+   "profit_factor": 0.0,
+   "max_drawdown": null,
+   "avg_hold_min": null
+  },
+  "SPY": {
+   "trades": 4,
+   "wins": 1,
+   "losses": 3,
+   "pnl": -736.0,
+   "win_rate": 0.25,
+   "avg_win": 222.0,
+   "avg_loss": 319.33,
+   "payoff": 0.6952,
+   "breakeven_win_rate": 0.5899,
+   "expectancy": -184.0,
+   "profit_factor": 0.2317,
+   "max_drawdown": null,
+   "avg_hold_min": null
+  }
+ },
+ "health": {
+  "positions_at_close": 2,
+  "open_positions": [
+   {
+    "symbol": "IWM261016P00260000",
+    "qty": "1",
+    "side": "long"
+   },
+   {
+    "symbol": "QQQ261016P00655000",
+    "qty": "8",
+    "side": "long"
+   }
+  ],
+  "data_lag_min": null,
+  "halts": null,
+  "pnl_estimated": true,
+  "unmatched_closes": 0
+ },
+ "reconciliation": {
+  "bot_estimated_pnl": 0.0,
+  "broker_realized_pnl": -4020.0,
+  "difference": -4020.0,
+  "avg_slippage_per_contract": -13.0519,
+  "contracts_closed": 308
+ }
+}
