@@ -1,1 +1,1 @@
-[]
+[{"event": "entry", "symbol": "QQQ", "side": "PUT", "qty": 8, "occ": "QQQ261016P00655000", "strike": 655.0, "reason": "orb-breakdown-dn", "underlying_px": 721.0, "atr": 0.7274071428571298, "est_premium": 0.5, "time": "2026-10-16T10:37:05.282516-04:00"}]
