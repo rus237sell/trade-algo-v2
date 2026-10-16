@@ -7,6 +7,7 @@ and plumbing, not for live 1-min signals.
 Env: ALPACA_API_KEY, ALPACA_API_SECRET (paper keys from alpaca.markets)
 """
 import os
+import time
 import uuid
 from datetime import datetime, timedelta
 
@@ -56,7 +57,7 @@ class AlpacaBroker:
         # rejects a reused id with 422. Bare reason tags ("v2:atr-stop")
         # collide with orders from earlier sessions, which wedged every
         # exit retry. Suffix a short unique id per submission instead.
-        cid = f"{tag}:{uuid.uuid4().hex[:8]}"[:48]
+        cid = f"{tag}:{uuid.uuid4().hex[:8]}"[:128]
         payload = {
             "symbol": occ, "qty": qty, "side": side,
             "type": "limit" if limit_price is not None else "market",
@@ -94,6 +95,40 @@ class AlpacaBroker:
                          headers=self.auth.headers(), timeout=15)
         r.raise_for_status()
         return r.json()
+
+    def get_order(self, order_id):
+        """One order's current state, or None on any read failure."""
+        try:
+            r = requests.get(f"{PAPER_BASE}/v2/orders/{order_id}",
+                             headers=self.auth.headers(), timeout=15)
+            r.raise_for_status()
+            return r.json()
+        except Exception:
+            return None
+
+    def wait_fill(self, order_id, timeout=15):
+        """Poll an order until it fills, ends unfilled, or the timeout
+        passes. Returns the last order state seen (or None). Accepted
+        is not filled: callers must check the returned status."""
+        deadline = time.time() + timeout
+        last = None
+        while True:
+            last = self.get_order(order_id)
+            if last is not None and last.get("status") in (
+                    "filled", "canceled", "expired", "rejected",
+                    "suspended"):
+                return last
+            if time.time() >= deadline:
+                return last
+            time.sleep(1)
+
+    def cancel_order(self, order_id):
+        try:
+            r = requests.delete(f"{PAPER_BASE}/v2/orders/{order_id}",
+                                headers=self.auth.headers(), timeout=15)
+            return r.status_code in (200, 204)
+        except Exception:
+            return False
 
 
 class AlpacaData:
@@ -168,3 +203,22 @@ class AlpacaData:
             if not token:
                 break
         return contracts
+
+    def option_quote(self, occ):
+        """Latest indicative quote for one contract as (bid, ask);
+        either side may be None, and (None, None) means the contract
+        has no quote at all (or the read failed)."""
+        if self.auth.dry:
+            return (None, None)
+        try:
+            r = requests.get(
+                f"{DATA_BASE}/v1beta1/options/quotes/latest",
+                params={"symbols": occ, "feed": "indicative"},
+                headers=self.auth.headers(), timeout=10)
+            r.raise_for_status()
+            q = (r.json().get("quotes") or {}).get(occ) or {}
+            bid, ask = q.get("bp"), q.get("ap")
+            return (float(bid) if bid else None,
+                    float(ask) if ask else None)
+        except Exception:
+            return (None, None)
