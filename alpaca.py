@@ -7,6 +7,7 @@ and plumbing, not for live 1-min signals.
 Env: ALPACA_API_KEY, ALPACA_API_SECRET (paper keys from alpaca.markets)
 """
 import os
+import uuid
 from datetime import datetime, timedelta
 
 import requests
@@ -51,10 +52,15 @@ class AlpacaBroker:
             raise RuntimeError("ALPACA_API_KEY and ALPACA_API_SECRET are required")
 
     def _order(self, occ, qty, side, tag):
+        # client_order_id must be unique per order on the account: Alpaca
+        # rejects a reused id with 422. Bare reason tags ("v2:atr-stop")
+        # collide with orders from earlier sessions, which wedged every
+        # exit retry. Suffix a short unique id per submission instead.
+        cid = f"{tag}:{uuid.uuid4().hex[:8]}"[:48]
         r = requests.post(f"{PAPER_BASE}/v2/orders", json={
             "symbol": occ, "qty": qty, "side": side,
             "type": "market", "time_in_force": "day",
-            "client_order_id": tag[:48],
+            "client_order_id": cid,
         }, headers=self.auth.headers(), timeout=15)
         r.raise_for_status()
         return r.json()
