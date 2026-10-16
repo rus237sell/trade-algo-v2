@@ -1,6 +1,6 @@
 {
  "status": "final",
- "generated_at": "2026-10-16T16:00:54.310962-04:00",
+ "generated_at": "2026-10-16T16:04:06.270503-04:00",
  "source": "alpaca-fills",
  "farm": {
   "trades": 9,
@@ -69,10 +69,10 @@
   "unmatched_closes": 0
  },
  "reconciliation": {
-  "bot_estimated_pnl": 0.0,
+  "bot_estimated_pnl": 1610.0,
   "broker_realized_pnl": -4020.0,
-  "difference": -4020.0,
-  "avg_slippage_per_contract": -13.0519,
+  "difference": -5630.0,
+  "avg_slippage_per_contract": -18.2792,
   "contracts_closed": 308
  }
 }
