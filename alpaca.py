@@ -7,10 +7,16 @@ and plumbing, not for live 1-min signals.
 Env: ALPACA_API_KEY, ALPACA_API_SECRET (paper keys from alpaca.markets)
 """
 import os
+from datetime import datetime, timedelta
+
 import requests
 import pytz
 
 ET = pytz.timezone("America/New_York")
+
+# Alpaca's free Basic plan refuses SIP data younger than 15 min (403
+# Forbidden), so bars requests must end at least this far in the past.
+FREE_PLAN_DELAY_MIN = 16
 
 
 def _utc_z(dt):
@@ -74,6 +80,16 @@ class AlpacaData:
 
     def bars_1min(self, symbol, start, end):
         if self.auth.dry:
+            return []
+
+        def _aware(dt):
+            return ET.localize(dt) if dt.tzinfo is None else dt
+
+        # Clamp the window end into the free plan's entitlement: asking
+        # for SIP bars newer than the delay cap 403s the whole request.
+        end_cap = datetime.now(pytz.UTC) - timedelta(minutes=FREE_PLAN_DELAY_MIN)
+        end = min(_aware(end), end_cap)
+        if end <= _aware(start):
             return []
         bars, token = [], None
         while True:
