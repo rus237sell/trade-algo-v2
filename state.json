@@ -1,17 +1,10 @@
 {
-  "time": "2026-10-16T13:09:11.325411-04:00",
+  "time": "2026-10-16T13:14:25.699986-04:00",
   "session": "open",
-  "day_pnl": 0.0,
+  "day_pnl": 17.5,
   "halted": false,
   "stale_data": false,
   "positions": [
-    {
-      "symbol": "IWM",
-      "side": "PUT",
-      "qty": 1,
-      "occ": "IWM261016P00260000",
-      "recovered": true
-    },
     {
       "symbol": "QQQ",
       "side": "PUT",
@@ -20,6 +13,6 @@
       "recovered": true
     }
   ],
-  "data_lag_min": 16.2,
+  "data_lag_min": 16.4,
   "broker": "alpaca"
 }
