@@ -1,5 +1,5 @@
 {
-  "time": "2026-10-16T15:24:13.945110-04:00",
+  "time": "2026-10-16T15:27:58.374414-04:00",
   "session": "open",
   "day_pnl": 153.0,
   "halted": false,
@@ -11,8 +11,22 @@
       "qty": 8,
       "occ": "QQQ261016P00655000",
       "recovered": true
+    },
+    {
+      "symbol": "SPY",
+      "side": "CALL",
+      "qty": 13,
+      "occ": "SPY261016C00762000",
+      "recovered": false
+    },
+    {
+      "symbol": "IWM",
+      "side": "CALL",
+      "qty": 38,
+      "occ": "IWM261016C00270000",
+      "recovered": false
     }
   ],
-  "data_lag_min": 16.2,
+  "data_lag_min": 17.0,
   "broker": "alpaca"
 }
