@@ -11,6 +11,7 @@ import pytz
 import requests
 
 from alpaca import AlpacaAuth
+from ledger import parse_lines, summarize
 from reconcile import DIVERGENCE_THRESHOLD, divergence, realized_pnl
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -37,16 +38,11 @@ ledger_net = None  # estimated net from the ledger, for reconciliation below
 entries = exits = 0
 net = 0.0
 reasons = {}
+all_records = []
 try:
     with open(os.path.join(BASE, "trades.jsonl")) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                t = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+        all_records = parse_lines(f)
+        for t in all_records:
             if not str(t.get("time", "")).startswith(today):
                 continue
             if t.get("event") == "entry":
@@ -65,6 +61,31 @@ try:
         print("  no ledger entries today")
 except FileNotFoundError:
     print("no trades logged yet")
+
+print("== LEDGER SUMMARY (all time, estimates) ==")
+_s = summarize(all_records)
+if _s["exits"] == 0:
+    print("  no priced exits in ledger yet — no expectancy to report")
+else:
+    _pf = f"{_s['profit_factor']:.2f}" if _s["profit_factor"] is not None else "n/a"
+    _aw = f"{_s['avg_win']:+.2f}" if _s["avg_win"] is not None else "n/a"
+    _al = f"{_s['avg_loss']:+.2f}" if _s["avg_loss"] is not None else "n/a"
+    print(f"  {_s['entries']} entries / {_s['exits']} exits | "
+          f"net {_s['net']:+.2f} | expectancy {_s['expectancy']:+.2f}/exit | "
+          f"win rate {_s['win_rate']:.1%}")
+    print(f"  avg win {_aw} | avg loss {_al} | profit factor {_pf}")
+    for _label, _cuts in (("reason", _s["by_reason"]),
+                          ("symbol", _s["by_symbol"])):
+        for _k, _v in _cuts.items():
+            print(f"  by {_label} {_k}: {_v['exits']} exits, "
+                  f"net {_v['net']:+.2f}, expectancy {_v['expectancy']:+.2f}, "
+                  f"win rate {_v['win_rate']:.1%}")
+    if _s["recovered_exits"]:
+        print(f"  note: {_s['recovered_exits']} exits were on recovered "
+              f"positions (P&L measured from recovery price)")
+    if _s["unpriced_exits"]:
+        print(f"  WARNING: {_s['unpriced_exits']} exits have no est_pnl "
+              f"and are excluded from these stats")
 
 print("== ALPACA PAPER ==")
 auth = AlpacaAuth()

@@ -27,6 +27,7 @@ Paper-trade the Scalp City 0DTE scalping system: 1-min VWAP / 50-EMA / opening-r
 - Restart-safe: on startup the bot re-adopts open 0DTE positions from the broker (same-day expiry, strategy symbols only), so a crash or reboot can't orphan positions — ATR exits and the flatten still fire for them. Recovered legs carry a `recovered` flag in state.json.
 
 ## Versions
+- v2.9: ledger expectancy summary — status.py now reports all-time ledger stats (win rate, expectancy per exit, avg win/loss, profit factor) cut by exit reason and symbol via ledger.py, with recovered and unpriced exits flagged instead of silently averaged in. Reporting only; no trading or guard behavior changes.
 - v2.8: ledger-vs-broker reconciliation — status.py pairs Alpaca buy/sell fills FIFO per contract (reconcile.py) and prints today's realized fill P&L next to the ledger's estimated P&L, flagging divergence over $25 and sells it could not pair with a fetched buy. Reporting only; the daily guard still runs on estimates.
 - v2.7: trade ledger — append-only trades.jsonl records every entry and exit (time, symbol, OCC, qty, reason, est P&L, running day P&L) so a day's trading can be reviewed or reconciled against broker fills; status.py prints today's entries/exits, net est P&L, and exits by reason.
 - v2.6: startup position recovery — re-adopt today's open 0DTE legs from the broker at boot (ATR exits + EOD flatten cover them; entry unknown, measured from recovery price); TradierBroker.positions() added; broker outages during recovery never stop the bot.

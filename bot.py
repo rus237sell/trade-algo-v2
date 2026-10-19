@@ -22,24 +22,6 @@ from broker import DryRunBroker, TradierBroker, occ_symbol, parse_occ
 ET = pytz.timezone("America/New_York")
 
 
-def _git_sha():
-    """Short SHA of the checked-out code, stamped into state.json so
-    monitoring can always see which code is actually running (whole-
-    file overwrites have silently reverted fixes here before)."""
-    try:
-        import subprocess
-        out = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=os.path.dirname(os.path.abspath(__file__)),
-            capture_output=True, text=True, timeout=5)
-        return out.stdout.strip() or "unknown"
-    except Exception:
-        return "unknown"
-
-
-GIT_SHA = _git_sha()
-
-
 def parse_t(s):
     h, m = map(int, s.split(":"))
     return dtime(h, m)
@@ -77,7 +59,6 @@ class Bot:
         self.positions = {}  # symbol -> Position
         self._last_lag_warn = None
         self._last_stale_warn = None
-        self._last_halt_warn = None
         self._recover_positions()
 
     def _ledger_path(self):
@@ -181,41 +162,9 @@ class Bot:
         a = atr(df, self.cfg.atr_period).iloc[-1]
         qty = contracts_for_risk(a, self.cfg.risk_per_trade)
         occ, strike = self._pick_occ(symbol, side, px, now.date())
-        # Never buy a contract with no live quote: a quoteless far-OTM
-        # contract can be bought for $0.01 but then cannot be sold at
-        # all (Alpaca rejects market sells when no quote is available).
-        if isinstance(self.data, AlpacaData):
-            bid, ask = self.data.option_quote(occ)
-            if bid is None or ask is None:
-                print(f"ENTER SKIPPED {symbol} {side} ({reason}): "
-                      f"no two-sided quote for {occ} (bid={bid} ask={ask})")
-                return
         # Estimate premium for sizing log (live: use quote)
         premium = max(0.5, 0.5 * a)
-        # client_order_id must be unique per order intent: a reason-only
-        # tag collides with any earlier order that used it (e.g. an
-        # "atr-stop" exit from a previous day) and Alpaca rejects the
-        # order with 422. Symbol+reason+minute keeps a retry inside the
-        # same minute idempotent without burning the tag forever, and a
-        # rejected order must never abort the cycle, so log and skip.
-        try:
-            order = self.broker.place(
-                occ, side, qty,
-                tag=f"v2:{symbol}:{reason}:{now:%Y%m%d%H%M}")
-        except Exception as e:
-            print(f"ENTER FAILED {symbol} ({reason}): {e}")
-            return
-        # Accepted is not filled: a terminal-unfilled entry order must
-        # not create a phantom position the broker does not hold.
-        if isinstance(self.broker, AlpacaBroker) and isinstance(order, dict) \
-                and order.get("id"):
-            filled = self.broker.wait_fill(order["id"], timeout=15)
-            if filled is not None and filled.get("status") in (
-                    "canceled", "expired", "rejected", "suspended") \
-                    and float(filled.get("filled_qty") or 0) == 0:
-                print(f"ENTER NOT FILLED {symbol} ({reason}): order "
-                      f"{order['id']} ended {filled.get('status')} unfilled")
-                return
+        self.broker.place(occ, side, qty, tag=f"v2:{reason}")
         self.positions[symbol] = Position(occ, side, qty, premium, px, a)
         self.cooldowns.mark(symbol, now)
         self._log_trade({"event": "entry", "symbol": symbol, "side": side,
@@ -224,103 +173,18 @@ class Bot:
                          "atr": float(a), "est_premium": float(premium)})
         print(f"ENTER {symbol} {side} {qty}x {occ} strike={strike} ({reason})")
 
-    def _exit(self, symbol, pos, reason, px, now):
-        # An exit order already working (e.g. the $0.01 limit placed
-        # when the contract had no quote) owns this position: poll it
-        # instead of stacking another order on top.
-        if getattr(pos, "exit_order_id", None):
-            self._poll_exit(symbol, pos, px)
-            return
-        # Unique-per-intent tag (see _enter): contract+reason+minute.
-        # A rejected close logs and leaves the position in place for a
-        # retry instead of aborting the cycle and freezing the state.
-        try:
-            order = self.broker.close(
-                pos.occ, pos.qty,
-                tag=f"v2:exit:{pos.occ}:{reason}:{now:%H%M}")
-        except Exception as e:
-            print(f"EXIT FAILED {symbol} ({reason}): {e}")
-            return
-        # Accepted is not filled: an exit only counts once the broker
-        # reports the fill. A market order on a quoted contract fills
-        # in seconds; a quoteless-contract limit order may rest, so
-        # park it on the position and let later cycles poll it rather
-        # than dropping the position while the broker still holds it
-        # (an orphaned long 0DTE can even auto-exercise into stock).
-        if isinstance(self.broker, AlpacaBroker) and isinstance(order, dict) \
-                and order.get("id"):
-            filled = self.broker.wait_fill(order["id"], timeout=15)
-            if filled is not None and filled.get("status") == "filled":
-                self._finalize_exit(symbol, pos, reason, px, filled)
-                return
-            if filled is not None and filled.get("status") in (
-                    "canceled", "expired", "rejected", "suspended") \
-                    and float(filled.get("filled_qty") or 0) == 0:
-                print(f"EXIT NOT FILLED {symbol} ({reason}): order "
-                      f"{order['id']} ended {filled.get('status')} "
-                      f"unfilled; position held for retry")
-                return
-            pos.exit_order_id = order["id"]
-            pos.exit_order_ts = time.time()
-            pos.exit_reason = reason
-            print(f"EXIT PENDING {symbol} ({reason}): order {order['id']} "
-                  f"accepted, not filled yet; position held")
-            return
-        self._finalize_exit(symbol, pos, reason, px, None)
-
-    def _finalize_exit(self, symbol, pos, reason, px, order):
-        """Book an exit the broker has actually filled (or, for non-
-        Alpaca brokers, an accepted close as before). Prefers the real
-        fill price for P&L when the broker reports one."""
-        fill_px = None
-        if order is not None and order.get("filled_avg_price"):
-            try:
-                fill_px = float(order["filled_avg_price"])
-            except (TypeError, ValueError):
-                fill_px = None
-        if fill_px is not None and pos.entry_premium:
-            pnl = (fill_px - pos.entry_premium) * pos.qty * 100
-        else:
-            pnl = pos.est_pnl(px)
+    def _exit(self, symbol, pos, reason, px):
+        pnl = pos.est_pnl(px)
+        self.broker.close(pos.occ, pos.qty, tag=f"v2:{reason}")
         self.guard.pnl += pnl
         self._log_trade({"event": "exit", "symbol": symbol, "side": pos.side,
                          "qty": pos.qty, "occ": pos.occ, "reason": reason,
                          "underlying_px": float(px),
                          "est_pnl": float(round(pnl, 2)),
-                         "fill_price": fill_px,
                          "day_pnl": float(round(self.guard.pnl, 2)),
-                         "recovered": bool(getattr(pos, "recovered", False))})
-        if self.positions.get(symbol) is pos:
-            del self.positions[symbol]
-        print(f"EXIT {symbol} {pos.side} ({reason}) pnl={pnl:+.2f} "
-              f"day={self.guard.pnl:+.2f}"
-              + (f" fill={fill_px:.2f}" if fill_px is not None else " (est)"))
-
-    def _poll_exit(self, symbol, pos, px):
-        oid = pos.exit_order_id
-        order = self.broker.get_order(oid)
-        if order is None:
-            return  # transient read failure; try again next cycle
-        status = order.get("status")
-        if status == "filled" or (
-                status in ("canceled", "expired", "rejected", "suspended")
-                and float(order.get("filled_qty") or 0) > 0):
-            self._finalize_exit(symbol, pos,
-                                getattr(pos, "exit_reason", "exit"),
-                                px, order)
-            return
-        if status in ("canceled", "expired", "rejected", "suspended"):
-            print(f"EXIT ORDER ENDED {symbol}: {oid} {status} unfilled; "
-                  f"position held, exit re-evaluated next cycle")
-            pos.exit_order_id = None
-            return
-        # Still working: cancel/replace if it has rested too long so a
-        # stale limit cannot pin the position while the market moves.
-        if time.time() - getattr(pos, "exit_order_ts", 0) > 120:
-            self.broker.cancel_order(oid)
-            pos.exit_order_id = None
-            print(f"EXIT ORDER STALE {symbol}: cancelled {oid}; "
-                  f"a fresh exit will be placed when the exit rule fires")
+                         "recovered": bool(pos.recovered)})
+        del self.positions[symbol]
+        print(f"EXIT {symbol} {pos.side} ({reason}) est_pnl={pnl:+.2f} day={self.guard.pnl:+.2f}")
 
     def _save_state(self, now, session_state, max_lag_min, stale_data=False):
         """Write a small status file every cycle for status.py / monitoring."""
@@ -340,7 +204,6 @@ class Bot:
             ],
             "data_lag_min": round(max_lag_min, 1) if max_lag_min is not None else None,
             "broker": os.getenv("BROKER", self.cfg.broker),
-            "git_sha": GIT_SHA,
         }
         try:
             with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -373,25 +236,13 @@ class Bot:
     def cycle(self):
         now = datetime.now(ET)
         self.guard.reset_if_new_day(now)
-        # Drop positions whose contract expired on an earlier day (a
-        # flatten order that never filled): they can never exit, and
-        # exit retries against a dead contract would wedge forever.
-        today_yymmdd = now.strftime("%y%m%d")
-        for sym, pos in list(self.positions.items()):
-            try:
-                _root, pos_yymmdd, _cp, _strike = parse_occ(pos.occ)
-            except ValueError:
-                continue
-            if pos_yymmdd != today_yymmdd:
-                print(f"PRUNE {sym}: dropping expired position {pos.occ}")
-                del self.positions[sym]
         state = self._session_state(now)
 
         if state == "flatten":
             for sym, pos in list(self.positions.items()):
                 df = self._day_bars(sym, now)
                 px = df["close"].iloc[-1] if df is not None else pos.underlying_entry
-                self._exit(sym, pos, "flatten-eod", px, now)
+                self._exit(sym, pos, "flatten-eod", px)
             self._save_state(now, state, None)
             return
 
@@ -404,11 +255,7 @@ class Bot:
         bars = {}
         lags = []
         for symbol in self.cfg.symbols:
-            try:
-                df = self._day_bars(symbol, now)
-            except Exception as e:
-                print(f"bars error ({symbol}): {e}")
-                continue
+            df = self._day_bars(symbol, now)
             if df is None or len(df) < 3:
                 continue
             bars[symbol] = df
@@ -426,7 +273,7 @@ class Bot:
                 pos = self.positions[symbol]
                 reason = pos.exit_reason(px, self.cfg)
                 if reason:
-                    self._exit(symbol, pos, reason, px, now)
+                    self._exit(symbol, pos, reason, px)
                 continue
 
             # Entries
@@ -435,14 +282,8 @@ class Bot:
             if stale:
                 continue  # fail-safe: manage exits only until data recovers
             if self.guard.halted():
-                # Skip entries only: returning here would also skip
-                # exit management for the remaining symbols and the
-                # end-of-cycle state save, freezing the dashboard.
-                if self._last_halt_warn is None or (
-                        now - self._last_halt_warn).total_seconds() > 300:
-                    print(f"HALTED for day (pnl={self.guard.pnl:+.2f})")
-                    self._last_halt_warn = now
-                continue
+                print(f"HALTED for day (pnl={self.guard.pnl:+.2f})")
+                return
             if len(self.positions) >= self.cfg.max_workers:
                 continue
             if not self.cooldowns.ready(symbol, now):
