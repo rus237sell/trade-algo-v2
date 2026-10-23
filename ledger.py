@@ -7,6 +7,12 @@ rate, avg win vs avg loss, and profit factor, cut by exit reason and
 by symbol so a losing exit path or symbol is visible instead of being
 averaged away.
 
+v2.10 adds the risk path behind those averages: max and current
+drawdown of the cumulative P&L curve (in ledger order) and win/loss
+streaks. Expectancy alone hides sequence — the same net can arrive
+via a shallow grind or a deep hole the daily guard would not
+tolerate, and drawdown is the number that tells them apart.
+
 Pure functions, no network and no file IO in the math: callers pass
 parsed ledger records in. Reporting only — nothing here changes
 trading, sizing, or guard behavior. Estimates, not broker fills;
@@ -14,15 +20,56 @@ reconcile.py remains the fill-based check.
 """
 
 
+def _path_stats(pnls):
+    """Drawdown and streak stats for exit P&Ls in chronological order.
+
+    Drawdowns are positive dollar magnitudes: max_drawdown is the
+    largest peak-to-trough fall of the cumulative curve (0.0 when the
+    curve never falls below a prior peak), current_drawdown is how
+    far the last point sits below the running peak. A breakeven exit
+    breaks both streaks. current_streak is signed: +n consecutive
+    wins, -n consecutive losses, 0 after a breakeven or no exits.
+    """
+    peak = cum = 0.0
+    max_dd = 0.0
+    longest_win = longest_loss = 0
+    run_win = run_loss = 0
+    for p in pnls:
+        cum += p
+        peak = max(peak, cum)
+        max_dd = max(max_dd, peak - cum)
+        if p > 0:
+            run_win, run_loss = run_win + 1, 0
+        elif p < 0:
+            run_win, run_loss = 0, run_loss + 1
+        else:
+            run_win = run_loss = 0
+        longest_win = max(longest_win, run_win)
+        longest_loss = max(longest_loss, run_loss)
+    if run_win:
+        current = run_win
+    elif run_loss:
+        current = -run_loss
+    else:
+        current = 0
+    return {
+        "max_drawdown": round(max_dd, 2),
+        "current_drawdown": round(peak - cum, 2) if pnls else 0.0,
+        "longest_win_streak": longest_win,
+        "longest_loss_streak": longest_loss,
+        "current_streak": current,
+    }
+
+
 def _stats(pnls):
-    """Core stats for a list of exit P&L values."""
+    """Core stats for a list of exit P&L values (in ledger order)."""
     wins = [p for p in pnls if p > 0]
     losses = [p for p in pnls if p < 0]
     gross_profit = sum(wins)
     gross_loss = sum(losses)  # negative, or 0.0
     net = gross_profit + gross_loss
     n = len(pnls)
-    return {
+    out = {
         "exits": n,
         "wins": len(wins),
         "losses": len(losses),
@@ -41,6 +88,8 @@ def _stats(pnls):
         "largest_win": round(max(pnls), 2) if pnls else None,
         "largest_loss": round(min(pnls), 2) if pnls else None,
     }
+    out.update(_path_stats(pnls))
+    return out
 
 
 def parse_lines(lines):
@@ -71,7 +120,8 @@ def summarize(records):
     Only exit records with a numeric est_pnl count toward P&L stats;
     exits missing est_pnl are counted separately as `unpriced_exits`
     so a gap in the ledger is visible rather than silently treated
-    as a $0 trade. Returns the overall stats plus `by_reason` and
+    as a $0 trade. Returns the overall stats (including drawdown and
+    streak stats from _path_stats) plus `by_reason` and
     `by_symbol` breakdowns (same stat shape), `entries`, and
     `recovered_exits` (exits on positions re-adopted after a restart,
     whose P&L is measured from the recovery price, not true entry).

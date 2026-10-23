@@ -74,6 +74,13 @@ else:
           f"net {_s['net']:+.2f} | expectancy {_s['expectancy']:+.2f}/exit | "
           f"win rate {_s['win_rate']:.1%}")
     print(f"  avg win {_aw} | avg loss {_al} | profit factor {_pf}")
+    _cs = _s['current_streak']
+    _cs_txt = (f"{_cs}W" if _cs > 0 else
+               f"{-_cs}L" if _cs < 0 else "flat")
+    print(f"  max drawdown {_s['max_drawdown']:.2f} | "
+          f"current drawdown {_s['current_drawdown']:.2f} | "
+          f"longest loss streak {_s['longest_loss_streak']} | "
+          f"current streak {_cs_txt}")
     for _label, _cuts in (("reason", _s["by_reason"]),
                           ("symbol", _s["by_symbol"])):
         for _k, _v in _cuts.items():
