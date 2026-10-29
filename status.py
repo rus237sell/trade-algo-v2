@@ -81,12 +81,29 @@ else:
           f"current drawdown {_s['current_drawdown']:.2f} | "
           f"longest loss streak {_s['longest_loss_streak']} | "
           f"current streak {_cs_txt}")
+    _d = _s["days"]
+    if _d["trading_days"]:
+        print(f"  {_d['trading_days']} trading days | "
+              f"winning {_d['winning_days']} ({_d['win_day_rate']:.1%}) | "
+              f"avg day {_d['avg_day_net']:+.2f} | "
+              f"best {_d['best_day']['date']} {_d['best_day']['net']:+.2f} | "
+              f"worst {_d['worst_day']['date']} {_d['worst_day']['net']:+.2f}")
+        print(f"  guard days (final net): target x{_d['target_days']} | "
+              f"loss limit x{_d['loss_limit_days']}")
     for _label, _cuts in (("reason", _s["by_reason"]),
                           ("symbol", _s["by_symbol"])):
         for _k, _v in _cuts.items():
             print(f"  by {_label} {_k}: {_v['exits']} exits, "
                   f"net {_v['net']:+.2f}, expectancy {_v['expectancy']:+.2f}, "
                   f"win rate {_v['win_rate']:.1%}")
+    for _day in sorted(_s["by_day"])[-5:]:
+        _v = _s["by_day"][_day]
+        print(f"  by day {_day}: {_v['entries']} entries / "
+              f"{_v['exits']} exits, net {_v['net']:+.2f}, "
+              f"win rate {_v['win_rate']:.1%}")
+    if _s["undated_exits"]:
+        print(f"  note: {_s['undated_exits']} exits have no usable date "
+              f"and are excluded from the by-day stats")
     if _s["recovered_exits"]:
         print(f"  note: {_s['recovered_exits']} exits were on recovered "
               f"positions (P&L measured from recovery price)")
