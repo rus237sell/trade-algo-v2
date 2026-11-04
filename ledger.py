@@ -13,6 +13,15 @@ streaks. Expectancy alone hides sequence — the same net can arrive
 via a shallow grind or a deep hole the daily guard would not
 tolerate, and drawdown is the number that tells them apart.
 
+v2.12 adds the intraday cut: the same stats per ET hour of exit.
+A 0DTE scalper lives inside one session — the opening-range hour,
+midday, and the run into the 15:45 ET flatten are different regimes
+(chasing the open vs fighting theta into the close), and reason /
+symbol / day cuts all average them together. An exit timed at
+09:xx is a different trade from one at 15:xx even on the same day
+and symbol, so expectancy by exit hour shows whether the edge (if
+any) is a morning edge, an afternoon edge, or neither.
+
 v2.11 adds the calendar cut: the same stats per trading day, plus
 day-level aggregates (winning/losing days, best/worst day, average
 day, and how many days finished at or beyond the daily guard's
@@ -146,6 +155,29 @@ def _day_key(rec):
     return None
 
 
+def _hour_key(rec):
+    """Session-hour key (``"09"`` .. ``"15"``) from a record's `time`.
+
+    Ledger times are ET ISO strings (``2026-10-05T14:32:00-04:00``),
+    so characters 11-12 are the ET hour of the exit — no timezone
+    conversion needed, matching _day_key's prefix approach. A time
+    with no ``T`` separator, a non-numeric hour, an hour outside
+    0-23, or no ``:`` after the hour yields None rather than a
+    garbage bucket. The key is zero-padded so buckets sort in
+    session order.
+    """
+    t = str(rec.get("time") or "")
+    if len(t) < 14 or t[10] not in ("T", " ") or t[13] != ":":
+        return None
+    hh = t[11:13]
+    if not hh.isdigit():
+        return None
+    hour = int(hh)
+    if hour < 0 or hour > 23:
+        return None
+    return f"{hour:02d}"
+
+
 def _day_aggregates(by_day, guard_target, guard_max_loss):
     """Day-level aggregates over the per-day stats in `by_day`.
 
@@ -189,24 +221,29 @@ def summarize(records, guard_target=DEFAULT_GUARD_TARGET,
     so a gap in the ledger is visible rather than silently treated
     as a $0 trade. Returns the overall stats (including drawdown and
     streak stats from _path_stats) plus `by_reason`, `by_symbol`,
-    and `by_day` breakdowns (same stat shape; `by_day` values also
-    carry that day's `entries`), `entries`, `recovered_exits`, and
-    `days` (day-level aggregates from _day_aggregates, judged
-    against guard_target / guard_max_loss).
+    `by_day`, and `by_hour` breakdowns (same stat shape; `by_day`
+    values also carry that day's `entries`), `entries`,
+    `recovered_exits`, and `days` (day-level aggregates from
+    _day_aggregates, judged against guard_target / guard_max_loss).
 
     A priced exit whose `time` has no usable date still counts in
     every non-day stat but lands in no day bucket; those are counted
     as `undated_exits` so the gap is visible. Days with entries but
     no priced exit are not trading days here — they have no P&L to
-    judge against the guard.
+    judge against the guard. Likewise a priced exit with no usable
+    hour counts everywhere except `by_hour` and is counted as
+    `untimed_exits`; a date-only time is dated but untimed, so the
+    two gaps are tracked separately.
     """
     entries = 0
     unpriced_exits = 0
     recovered_exits = 0
     undated_exits = 0
+    untimed_exits = 0
     all_pnls = []
     by_reason = {}
     by_symbol = {}
+    by_hour = {}
     day_pnls = {}    # date -> [exit P&Ls in ledger order]
     day_entries = {}  # date -> entry count
     for rec in records or []:
@@ -230,6 +267,11 @@ def summarize(records, guard_target=DEFAULT_GUARD_TARGET,
             recovered_exits += 1
         by_reason.setdefault(rec.get("reason") or "?", []).append(pnl)
         by_symbol.setdefault(rec.get("symbol") or "?", []).append(pnl)
+        hour = _hour_key(rec)
+        if hour is None:
+            untimed_exits += 1
+        else:
+            by_hour.setdefault(hour, []).append(pnl)
         day = _day_key(rec)
         if day is None:
             undated_exits += 1
@@ -240,8 +282,10 @@ def summarize(records, guard_target=DEFAULT_GUARD_TARGET,
     out["unpriced_exits"] = unpriced_exits
     out["recovered_exits"] = recovered_exits
     out["undated_exits"] = undated_exits
+    out["untimed_exits"] = untimed_exits
     out["by_reason"] = {k: _stats(v) for k, v in sorted(by_reason.items())}
     out["by_symbol"] = {k: _stats(v) for k, v in sorted(by_symbol.items())}
+    out["by_hour"] = {k: _stats(v) for k, v in sorted(by_hour.items())}
     by_day = {}
     for day in sorted(day_pnls):
         stats = _stats(day_pnls[day])

@@ -174,5 +174,68 @@ class TestByDay(unittest.TestCase):
         self.assertEqual(s["days"]["trading_days"], 0)
 
 
+def hour_exits(hour, pnls, day="2026-10-05", **kw):
+    return [{"event": "exit", "est_pnl": p,
+             "time": f"{day}T{hour}:15:00-04:00", **kw} for p in pnls]
+
+
+class TestByHour(unittest.TestCase):
+    def test_empty_has_no_hours(self):
+        s = summarize([])
+        self.assertEqual(s["by_hour"], {})
+        self.assertEqual(s["untimed_exits"], 0)
+
+    def test_hour_buckets_sort_in_session_order(self):
+        # Inserted latest first on purpose: buckets sort by hour.
+        recs = (hour_exits("15", [30])
+                + hour_exits("09", [100, -40])
+                + hour_exits("11", [-10]))
+        s = summarize(recs)
+        self.assertEqual(list(s["by_hour"]), ["09", "11", "15"])
+        self.assertEqual(s["by_hour"]["09"]["net"], 60.0)
+        self.assertEqual(s["by_hour"]["09"]["exits"], 2)
+        self.assertEqual(s["by_hour"]["11"]["net"], -10.0)
+        self.assertEqual(s["by_hour"]["15"]["expectancy"], 30.0)
+        self.assertEqual(s["net"], 80.0)  # hour nets sum to overall net
+
+    def test_hour_buckets_carry_path_stats(self):
+        s = summarize(hour_exits("10", [100, -40, -20]))
+        h = s["by_hour"]["10"]
+        self.assertEqual(h["max_drawdown"], 60.0)
+        self.assertEqual(h["current_streak"], -2)
+
+    def test_untimed_exits_count_overall_but_not_by_hour(self):
+        recs = (hour_exits("09", [10])
+                + exits([20])  # no time at all: undated and untimed
+                + [{"event": "exit", "est_pnl": 30,
+                    "time": "2026-10-05"}])  # date only: dated, untimed
+        s = summarize(recs)
+        self.assertEqual(s["exits"], 3)
+        self.assertEqual(s["net"], 60.0)
+        self.assertEqual(s["untimed_exits"], 2)
+        self.assertEqual(s["undated_exits"], 1)
+        self.assertEqual(list(s["by_hour"]), ["09"])
+        self.assertEqual(s["by_hour"]["09"]["net"], 10.0)
+        # The date-only exit still lands in its day bucket.
+        self.assertEqual(s["by_day"]["2026-10-05"]["net"], 40.0)
+
+    def test_malformed_hours_are_untimed(self):
+        recs = ([{"event": "exit", "est_pnl": 5, "time": t}
+                 for t in ("2026-10-05T24:00:00-04:00",
+                           "2026-10-05T9x:00:00-04:00",
+                           "2026-10-05 093000",
+                           "garbage")])
+        s = summarize(recs)
+        self.assertEqual(s["by_hour"], {})
+        self.assertEqual(s["untimed_exits"], 4)
+        self.assertEqual(s["net"], 20.0)
+
+    def test_entries_do_not_create_hour_buckets(self):
+        recs = [{"event": "entry", "time": "2026-10-05T09:45:00-04:00"}]
+        s = summarize(recs)
+        self.assertEqual(s["by_hour"], {})
+        self.assertEqual(s["untimed_exits"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

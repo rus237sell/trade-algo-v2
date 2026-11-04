@@ -96,6 +96,10 @@ else:
             print(f"  by {_label} {_k}: {_v['exits']} exits, "
                   f"net {_v['net']:+.2f}, expectancy {_v['expectancy']:+.2f}, "
                   f"win rate {_v['win_rate']:.1%}")
+    for _hour, _v in _s["by_hour"].items():
+        print(f"  by hour {_hour} ET: {_v['exits']} exits, "
+              f"net {_v['net']:+.2f}, expectancy {_v['expectancy']:+.2f}, "
+              f"win rate {_v['win_rate']:.1%}")
     for _day in sorted(_s["by_day"])[-5:]:
         _v = _s["by_day"][_day]
         print(f"  by day {_day}: {_v['entries']} entries / "
@@ -104,6 +108,9 @@ else:
     if _s["undated_exits"]:
         print(f"  note: {_s['undated_exits']} exits have no usable date "
               f"and are excluded from the by-day stats")
+    if _s["untimed_exits"]:
+        print(f"  note: {_s['untimed_exits']} exits have no usable time "
+              f"and are excluded from the by-hour stats")
     if _s["recovered_exits"]:
         print(f"  note: {_s['recovered_exits']} exits were on recovered "
               f"positions (P&L measured from recovery price)")
