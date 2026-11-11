@@ -22,6 +22,17 @@ symbol / day cuts all average them together. An exit timed at
 and symbol, so expectancy by exit hour shows whether the edge (if
 any) is a morning edge, an afternoon edge, or neither.
 
+v2.13 adds the direction cut: the same stats per option side
+(CALL vs PUT). Every signal in this system is directional — an
+upside VWAP / EMA / opening-range break buys a call, a downside
+break buys a put — but reason, symbol, day, and hour cuts all pool
+the two directions together. If upside breaks work and downside
+breaks do not (or the reverse), the pooled expectancy hides it
+exactly where a directional scalper needs to see it. Exit records
+have carried `side` since v2.7; this cut finally uses it. Sides
+are normalized (case-insensitive, C/P expanded to CALL/PUT) and a
+missing or blank side lands in "?" rather than a garbage bucket.
+
 v2.11 adds the calendar cut: the same stats per trading day, plus
 day-level aggregates (winning/losing days, best/worst day, average
 day, and how many days finished at or beyond the daily guard's
@@ -178,6 +189,23 @@ def _hour_key(rec):
     return f"{hour:02d}"
 
 
+def _side_key(rec):
+    """Direction key (``CALL`` / ``PUT``) from a record's `side`.
+
+    bot.py writes side as CALL/PUT on both entries and exits
+    (recovered positions included), but hand-edited or older ledger
+    lines may use lowercase or the OCC-style single letter, so the
+    value is upper-cased and C/P are expanded before bucketing.
+    Anything else non-empty is kept upper-cased as its own bucket;
+    a missing or blank side yields "?", matching by_reason /
+    by_symbol's unknown bucket.
+    """
+    side = str(rec.get("side") or "").strip().upper()
+    if not side:
+        return "?"
+    return {"C": "CALL", "P": "PUT"}.get(side, side)
+
+
 def _day_aggregates(by_day, guard_target, guard_max_loss):
     """Day-level aggregates over the per-day stats in `by_day`.
 
@@ -221,7 +249,7 @@ def summarize(records, guard_target=DEFAULT_GUARD_TARGET,
     so a gap in the ledger is visible rather than silently treated
     as a $0 trade. Returns the overall stats (including drawdown and
     streak stats from _path_stats) plus `by_reason`, `by_symbol`,
-    `by_day`, and `by_hour` breakdowns (same stat shape; `by_day`
+    `by_side`, `by_day`, and `by_hour` breakdowns (same stat shape; `by_day`
     values also carry that day's `entries`), `entries`,
     `recovered_exits`, and `days` (day-level aggregates from
     _day_aggregates, judged against guard_target / guard_max_loss).
@@ -243,6 +271,7 @@ def summarize(records, guard_target=DEFAULT_GUARD_TARGET,
     all_pnls = []
     by_reason = {}
     by_symbol = {}
+    by_side = {}
     by_hour = {}
     day_pnls = {}    # date -> [exit P&Ls in ledger order]
     day_entries = {}  # date -> entry count
@@ -267,6 +296,7 @@ def summarize(records, guard_target=DEFAULT_GUARD_TARGET,
             recovered_exits += 1
         by_reason.setdefault(rec.get("reason") or "?", []).append(pnl)
         by_symbol.setdefault(rec.get("symbol") or "?", []).append(pnl)
+        by_side.setdefault(_side_key(rec), []).append(pnl)
         hour = _hour_key(rec)
         if hour is None:
             untimed_exits += 1
@@ -285,6 +315,7 @@ def summarize(records, guard_target=DEFAULT_GUARD_TARGET,
     out["untimed_exits"] = untimed_exits
     out["by_reason"] = {k: _stats(v) for k, v in sorted(by_reason.items())}
     out["by_symbol"] = {k: _stats(v) for k, v in sorted(by_symbol.items())}
+    out["by_side"] = {k: _stats(v) for k, v in sorted(by_side.items())}
     out["by_hour"] = {k: _stats(v) for k, v in sorted(by_hour.items())}
     by_day = {}
     for day in sorted(day_pnls):

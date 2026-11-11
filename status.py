@@ -91,7 +91,8 @@ else:
         print(f"  guard days (final net): target x{_d['target_days']} | "
               f"loss limit x{_d['loss_limit_days']}")
     for _label, _cuts in (("reason", _s["by_reason"]),
-                          ("symbol", _s["by_symbol"])):
+                          ("symbol", _s["by_symbol"]),
+                          ("side", _s["by_side"])):
         for _k, _v in _cuts.items():
             print(f"  by {_label} {_k}: {_v['exits']} exits, "
                   f"net {_v['net']:+.2f}, expectancy {_v['expectancy']:+.2f}, "

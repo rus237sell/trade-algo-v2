@@ -237,5 +237,50 @@ class TestByHour(unittest.TestCase):
         self.assertEqual(s["untimed_exits"], 0)
 
 
+class TestBySide(unittest.TestCase):
+    def test_empty_has_no_sides(self):
+        s = summarize([])
+        self.assertEqual(s["by_side"], {})
+
+    def test_side_buckets_and_nets(self):
+        recs = (exits([100, -40], side="CALL")
+                + exits([-10, -10, 30], side="PUT"))
+        s = summarize(recs)
+        self.assertEqual(list(s["by_side"]), ["CALL", "PUT"])
+        self.assertEqual(s["by_side"]["CALL"]["net"], 60.0)
+        self.assertEqual(s["by_side"]["CALL"]["exits"], 2)
+        self.assertEqual(s["by_side"]["PUT"]["net"], 10.0)
+        self.assertEqual(s["by_side"]["PUT"]["expectancy"], 3.33)
+        self.assertEqual(s["net"], 70.0)  # side nets sum to overall net
+
+    def test_side_buckets_carry_path_stats(self):
+        s = summarize(exits([100, -40, -20], side="PUT"))
+        h = s["by_side"]["PUT"]
+        self.assertEqual(h["max_drawdown"], 60.0)
+        self.assertEqual(h["current_streak"], -2)
+
+    def test_side_normalization(self):
+        recs = (exits([10], side="call") + exits([20], side="C")
+                + exits([30], side=" Put ") + exits([40], side="P"))
+        s = summarize(recs)
+        self.assertEqual(list(s["by_side"]), ["CALL", "PUT"])
+        self.assertEqual(s["by_side"]["CALL"]["net"], 30.0)
+        self.assertEqual(s["by_side"]["PUT"]["net"], 70.0)
+
+    def test_missing_or_blank_side_is_unknown_bucket(self):
+        recs = (exits([5]) + exits([15], side="")
+                + exits([25], side="   "))
+        s = summarize(recs)
+        self.assertEqual(list(s["by_side"]), ["?"])
+        self.assertEqual(s["by_side"]["?"]["net"], 45.0)
+        self.assertEqual(s["net"], 45.0)
+
+    def test_entries_do_not_create_side_buckets(self):
+        recs = [{"event": "entry", "side": "CALL",
+                 "time": "2026-10-05T09:45:00-04:00"}]
+        s = summarize(recs)
+        self.assertEqual(s["by_side"], {})
+
+
 if __name__ == "__main__":
     unittest.main()
