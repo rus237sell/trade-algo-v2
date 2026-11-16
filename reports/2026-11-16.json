@@ -1,0 +1,82 @@
+{
+ "status": "final",
+ "generated_at": "2026-11-16T15:55:28.321222-05:00",
+ "source": "alpaca-fills",
+ "farm": {
+  "trades": 4,
+  "wins": 0,
+  "losses": 4,
+  "pnl": -892.0,
+  "win_rate": 0.0,
+  "avg_win": null,
+  "avg_loss": 223.0,
+  "payoff": null,
+  "breakeven_win_rate": null,
+  "expectancy": -223.0,
+  "profit_factor": 0.0,
+  "max_drawdown": null,
+  "avg_hold_min": null
+ },
+ "houses": {
+  "IWM": {
+   "trades": 1,
+   "wins": 0,
+   "losses": 1,
+   "pnl": -297.0,
+   "win_rate": 0.0,
+   "avg_win": null,
+   "avg_loss": 297.0,
+   "payoff": null,
+   "breakeven_win_rate": null,
+   "expectancy": -297.0,
+   "profit_factor": 0.0,
+   "max_drawdown": null,
+   "avg_hold_min": null
+  },
+  "SPY": {
+   "trades": 2,
+   "wins": 0,
+   "losses": 2,
+   "pnl": -518.0,
+   "win_rate": 0.0,
+   "avg_win": null,
+   "avg_loss": 259.0,
+   "payoff": null,
+   "breakeven_win_rate": null,
+   "expectancy": -259.0,
+   "profit_factor": 0.0,
+   "max_drawdown": null,
+   "avg_hold_min": null
+  },
+  "QQQ": {
+   "trades": 1,
+   "wins": 0,
+   "losses": 1,
+   "pnl": -77.0,
+   "win_rate": 0.0,
+   "avg_win": null,
+   "avg_loss": 77.0,
+   "payoff": null,
+   "breakeven_win_rate": null,
+   "expectancy": -77.0,
+   "profit_factor": 0.0,
+   "max_drawdown": null,
+   "avg_hold_min": null
+  }
+ },
+ "health": {
+  "positions_at_close": 0,
+  "open_positions": [],
+  "data_lag_min": null,
+  "halts": null,
+  "pnl_estimated": true,
+  "unmatched_closes": 0
+ },
+ "reconciliation": {
+  "bot_estimated_pnl": 0.0,
+  "broker_realized_pnl": -892.0,
+  "difference": -892.0,
+  "avg_slippage_per_contract": -15.6491,
+  "contracts_closed": 57
+ }
+}
