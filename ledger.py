@@ -33,6 +33,24 @@ have carried `side` since v2.7; this cut finally uses it. Sides
 are normalized (case-insensitive, C/P expanded to CALL/PUT) and a
 missing or blank side lands in "?" rather than a garbage bucket.
 
+v2.14 adds the signal cut: the same stats per entry signal
+(vwap-cross-up/dn, ema50-cross-up/dn, orb-breakout-up /
+orb-breakdown-dn). Every earlier cut groups an exit by something
+the exit record itself carries — its exit reason, symbol, side,
+day, hour — but the question a signal-driven scalper most needs
+answered is which of the three triggers produced the trade, and
+that lives on the ENTRY record: an exit's `reason` is why it
+closed (atr-target / atr-stop / flatten-eod), not what opened it.
+summarize() therefore pairs each exit with the entry that opened
+it (per symbol, OCC match preferred, FIFO otherwise — the bot
+holds at most one position per symbol, so pairing is unambiguous
+in a live ledger) and buckets the exit's P&L under that entry's
+signal. An exit with no entry ahead of it in the ledger (the
+file was rotated, or the entry predates it) lands in no signal
+bucket and is counted as `unsignaled_exits`, the same way undated
+and untimed exits are flagged for the day/hour cuts; its P&L
+still counts in every other stat.
+
 v2.11 adds the calendar cut: the same stats per trading day, plus
 day-level aggregates (winning/losing days, best/worst day, average
 day, and how many days finished at or beyond the daily guard's
@@ -249,10 +267,11 @@ def summarize(records, guard_target=DEFAULT_GUARD_TARGET,
     so a gap in the ledger is visible rather than silently treated
     as a $0 trade. Returns the overall stats (including drawdown and
     streak stats from _path_stats) plus `by_reason`, `by_symbol`,
-    `by_side`, `by_day`, and `by_hour` breakdowns (same stat shape; `by_day`
-    values also carry that day's `entries`), `entries`,
-    `recovered_exits`, and `days` (day-level aggregates from
-    _day_aggregates, judged against guard_target / guard_max_loss).
+    `by_side`, `by_signal`, `by_day`, and `by_hour` breakdowns (same
+    stat shape; `by_day` values also carry that day's `entries`),
+    `entries`, `recovered_exits`, and `days` (day-level aggregates
+    from _day_aggregates, judged against guard_target /
+    guard_max_loss).
 
     A priced exit whose `time` has no usable date still counts in
     every non-day stat but lands in no day bucket; those are counted
@@ -262,29 +281,58 @@ def summarize(records, guard_target=DEFAULT_GUARD_TARGET,
     hour counts everywhere except `by_hour` and is counted as
     `untimed_exits`; a date-only time is dated but untimed, so the
     two gaps are tracked separately.
+
+    For `by_signal`, each exit is paired with the open entry for
+    its symbol (an exact OCC match wins; otherwise the oldest open
+    entry for that symbol — the bot holds one position per symbol,
+    so this is unambiguous live). The pairing consumes the entry
+    even when the exit is unpriced, so a later exit cannot claim
+    it. A priced exit with no open entry ahead of it counts
+    everywhere except `by_signal` and is counted as
+    `unsignaled_exits`; an entry whose `reason` is missing buckets
+    its exit under "?".
     """
     entries = 0
     unpriced_exits = 0
     recovered_exits = 0
     undated_exits = 0
     untimed_exits = 0
+    unsignaled_exits = 0
     all_pnls = []
     by_reason = {}
     by_symbol = {}
     by_side = {}
+    by_signal = {}
     by_hour = {}
     day_pnls = {}    # date -> [exit P&Ls in ledger order]
     day_entries = {}  # date -> entry count
+    open_entries = {}  # symbol -> [entry records in ledger order]
     for rec in records or []:
         event = rec.get("event")
         if event == "entry":
             entries += 1
+            open_entries.setdefault(rec.get("symbol") or "?", []).append(rec)
             day = _day_key(rec)
             if day is not None:
                 day_entries[day] = day_entries.get(day, 0) + 1
             continue
         if event != "exit":
             continue
+        # Pair this exit with its opening entry before the priced
+        # check: an unpriced exit still closed the position, so it
+        # consumes the entry either way.
+        signal = None
+        queue = open_entries.get(rec.get("symbol") or "?") or []
+        if queue:
+            occ = rec.get("occ")
+            idx = None
+            if occ:
+                for i, ent in enumerate(queue):
+                    if ent.get("occ") == occ:
+                        idx = i
+                        break
+            entry_rec = queue.pop(idx) if idx is not None else queue.pop(0)
+            signal = entry_rec.get("reason") or "?"
         raw = rec.get("est_pnl")
         try:
             pnl = float(raw)
@@ -297,6 +345,10 @@ def summarize(records, guard_target=DEFAULT_GUARD_TARGET,
         by_reason.setdefault(rec.get("reason") or "?", []).append(pnl)
         by_symbol.setdefault(rec.get("symbol") or "?", []).append(pnl)
         by_side.setdefault(_side_key(rec), []).append(pnl)
+        if signal is None:
+            unsignaled_exits += 1
+        else:
+            by_signal.setdefault(signal, []).append(pnl)
         hour = _hour_key(rec)
         if hour is None:
             untimed_exits += 1
@@ -313,9 +365,11 @@ def summarize(records, guard_target=DEFAULT_GUARD_TARGET,
     out["recovered_exits"] = recovered_exits
     out["undated_exits"] = undated_exits
     out["untimed_exits"] = untimed_exits
+    out["unsignaled_exits"] = unsignaled_exits
     out["by_reason"] = {k: _stats(v) for k, v in sorted(by_reason.items())}
     out["by_symbol"] = {k: _stats(v) for k, v in sorted(by_symbol.items())}
     out["by_side"] = {k: _stats(v) for k, v in sorted(by_side.items())}
+    out["by_signal"] = {k: _stats(v) for k, v in sorted(by_signal.items())}
     out["by_hour"] = {k: _stats(v) for k, v in sorted(by_hour.items())}
     by_day = {}
     for day in sorted(day_pnls):

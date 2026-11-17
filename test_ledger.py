@@ -282,5 +282,100 @@ class TestBySide(unittest.TestCase):
         self.assertEqual(s["by_side"], {})
 
 
+def sig_entry(signal, symbol="QQQ", occ=None, **kw):
+    rec = {"event": "entry", "symbol": symbol, "reason": signal, **kw}
+    if occ is not None:
+        rec["occ"] = occ
+    return rec
+
+
+def sig_exit(pnl, symbol="QQQ", occ=None, **kw):
+    rec = {"event": "exit", "symbol": symbol, "est_pnl": pnl, **kw}
+    if occ is not None:
+        rec["occ"] = occ
+    return rec
+
+
+class TestBySignal(unittest.TestCase):
+    def test_empty_has_no_signals(self):
+        s = summarize([])
+        self.assertEqual(s["by_signal"], {})
+        self.assertEqual(s["unsignaled_exits"], 0)
+
+    def test_exits_bucket_under_their_entry_signal(self):
+        recs = [sig_entry("vwap-cross-up"), sig_exit(100),
+                sig_entry("orb-breakout-up"), sig_exit(-40),
+                sig_entry("vwap-cross-up"), sig_exit(30)]
+        s = summarize(recs)
+        self.assertEqual(list(s["by_signal"]),
+                         ["orb-breakout-up", "vwap-cross-up"])
+        self.assertEqual(s["by_signal"]["vwap-cross-up"]["net"], 130.0)
+        self.assertEqual(s["by_signal"]["vwap-cross-up"]["exits"], 2)
+        self.assertEqual(s["by_signal"]["orb-breakout-up"]["net"], -40.0)
+        self.assertEqual(s["unsignaled_exits"], 0)
+        self.assertEqual(s["net"], 90.0)  # signal nets sum to overall net
+
+    def test_pairing_is_per_symbol_when_interleaved(self):
+        recs = [sig_entry("vwap-cross-up", symbol="QQQ"),
+                sig_entry("ema50-cross-dn", symbol="SPY"),
+                sig_exit(-10, symbol="SPY"),   # exits first, still SPY's
+                sig_exit(50, symbol="QQQ")]
+        s = summarize(recs)
+        self.assertEqual(s["by_signal"]["ema50-cross-dn"]["net"], -10.0)
+        self.assertEqual(s["by_signal"]["vwap-cross-up"]["net"], 50.0)
+
+    def test_occ_match_beats_fifo(self):
+        # Two open entries on one symbol (never live, but a hand-kept
+        # ledger can hold them): the exit's OCC picks its own entry.
+        recs = [sig_entry("vwap-cross-up", occ="QQQ260105C00500000"),
+                sig_entry("orb-breakout-up", occ="QQQ260105C00510000"),
+                sig_exit(70, occ="QQQ260105C00510000"),
+                sig_exit(-20, occ="QQQ260105C00500000")]
+        s = summarize(recs)
+        self.assertEqual(s["by_signal"]["orb-breakout-up"]["net"], 70.0)
+        self.assertEqual(s["by_signal"]["vwap-cross-up"]["net"], -20.0)
+
+    def test_unsignaled_exit_counts_overall_but_not_by_signal(self):
+        recs = [sig_exit(45)]  # no entry ahead of it (rotated ledger)
+        s = summarize(recs)
+        self.assertEqual(s["exits"], 1)
+        self.assertEqual(s["net"], 45.0)
+        self.assertEqual(s["by_signal"], {})
+        self.assertEqual(s["unsignaled_exits"], 1)
+
+    def test_exit_before_entry_does_not_steal_it(self):
+        recs = [sig_exit(10),                      # unmatched: unsignaled
+                sig_entry("vwap-cross-dn"), sig_exit(-30)]
+        s = summarize(recs)
+        self.assertEqual(s["unsignaled_exits"], 1)
+        self.assertEqual(s["by_signal"]["vwap-cross-dn"]["net"], -30.0)
+        self.assertEqual(s["net"], -20.0)
+
+    def test_unpriced_exit_still_consumes_its_entry(self):
+        recs = [sig_entry("ema50-cross-up"),
+                {"event": "exit", "symbol": "QQQ"},  # unpriced exit
+                sig_exit(25)]  # nothing left to pair with
+        s = summarize(recs)
+        self.assertEqual(s["unpriced_exits"], 1)
+        self.assertEqual(s["unsignaled_exits"], 1)
+        self.assertEqual(s["by_signal"], {})
+
+    def test_missing_entry_reason_buckets_unknown(self):
+        recs = [{"event": "entry", "symbol": "QQQ"}, sig_exit(15)]
+        s = summarize(recs)
+        self.assertEqual(list(s["by_signal"]), ["?"])
+        self.assertEqual(s["by_signal"]["?"]["net"], 15.0)
+
+    def test_signal_buckets_carry_path_stats_and_open_entry_ignored(self):
+        recs = [sig_entry("vwap-cross-up"), sig_exit(100),
+                sig_entry("vwap-cross-up"), sig_exit(-40),
+                sig_entry("orb-breakdown-dn")]  # still open: no bucket
+        s = summarize(recs)
+        h = s["by_signal"]["vwap-cross-up"]
+        self.assertEqual(h["max_drawdown"], 40.0)
+        self.assertEqual(h["current_streak"], -1)
+        self.assertNotIn("orb-breakdown-dn", s["by_signal"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -92,7 +92,8 @@ else:
               f"loss limit x{_d['loss_limit_days']}")
     for _label, _cuts in (("reason", _s["by_reason"]),
                           ("symbol", _s["by_symbol"]),
-                          ("side", _s["by_side"])):
+                          ("side", _s["by_side"]),
+                          ("signal", _s["by_signal"])):
         for _k, _v in _cuts.items():
             print(f"  by {_label} {_k}: {_v['exits']} exits, "
                   f"net {_v['net']:+.2f}, expectancy {_v['expectancy']:+.2f}, "
@@ -112,6 +113,9 @@ else:
     if _s["untimed_exits"]:
         print(f"  note: {_s['untimed_exits']} exits have no usable time "
               f"and are excluded from the by-hour stats")
+    if _s["unsignaled_exits"]:
+        print(f"  note: {_s['unsignaled_exits']} exits have no entry in "
+              f"the ledger and are excluded from the by-signal stats")
     if _s["recovered_exits"]:
         print(f"  note: {_s['recovered_exits']} exits were on recovered "
               f"positions (P&L measured from recovery price)")
