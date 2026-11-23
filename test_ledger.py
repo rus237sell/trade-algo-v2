@@ -377,5 +377,105 @@ class TestBySignal(unittest.TestCase):
         self.assertNotIn("orb-breakdown-dn", s["by_signal"])
 
 
+def hold_pair(pnl, entry_time, exit_time, symbol="QQQ", **kw):
+    return [{"event": "entry", "symbol": symbol,
+             "time": entry_time, "reason": "vwap-cross-up"},
+            {"event": "exit", "symbol": symbol, "est_pnl": pnl,
+             "time": exit_time, **kw}]
+
+
+D = "2026-10-05T"
+
+
+class TestByHold(unittest.TestCase):
+    def test_empty_has_no_holds(self):
+        s = summarize([])
+        self.assertEqual(s["by_hold"], {})
+        self.assertEqual(s["unheld_exits"], 0)
+        self.assertEqual(s["hold"]["timed_exits"], 0)
+        self.assertIsNone(s["hold"]["avg_hold_min"])
+        self.assertIsNone(s["hold"]["median_hold_min"])
+
+    def test_hold_buckets_in_session_order_and_nets(self):
+        recs = (hold_pair(100, D + "09:35:00-04:00", D + "09:38:00-04:00")
+                + hold_pair(-40, D + "10:00:00-04:00", D + "10:10:00-04:00")
+                + hold_pair(30, D + "11:00:00-04:00", D + "12:30:00-04:00"))
+        s = summarize(recs)
+        self.assertEqual(list(s["by_hold"]), ["0-4m", "5-14m", "60m+"])
+        self.assertEqual(s["by_hold"]["0-4m"]["net"], 100.0)
+        self.assertEqual(s["by_hold"]["5-14m"]["net"], -40.0)
+        self.assertEqual(s["by_hold"]["60m+"]["net"], 30.0)
+        self.assertEqual(s["net"], 90.0)  # hold nets sum to overall net
+        self.assertEqual(s["unheld_exits"], 0)
+
+    def test_bucket_boundaries(self):
+        # 4:59 -> 0-4m; exactly 5:00 -> 5-14m; 15:00 -> 15-29m;
+        # 30:00 -> 30-59m; exactly 60:00 -> 60m+.
+        recs = (hold_pair(1, D + "09:00:00-04:00", D + "09:04:59-04:00")
+                + hold_pair(2, D + "09:10:00-04:00", D + "09:15:00-04:00")
+                + hold_pair(3, D + "09:20:00-04:00", D + "09:35:00-04:00")
+                + hold_pair(4, D + "09:40:00-04:00", D + "10:10:00-04:00")
+                + hold_pair(5, D + "10:20:00-04:00", D + "11:20:00-04:00"))
+        s = summarize(recs)
+        self.assertEqual(list(s["by_hold"]),
+                         ["0-4m", "5-14m", "15-29m", "30-59m", "60m+"])
+        self.assertEqual([s["by_hold"][k]["net"] for k in s["by_hold"]],
+                         [1.0, 2.0, 3.0, 4.0, 5.0])
+
+    def test_hold_aggregates_mean_median_min_max(self):
+        # Holds of 2, 10, 20, 40 minutes: mean 18, median (10+20)/2=15.
+        recs = (hold_pair(10, D + "09:00:00-04:00", D + "09:02:00-04:00")
+                + hold_pair(10, D + "09:10:00-04:00", D + "09:20:00-04:00")
+                + hold_pair(10, D + "09:30:00-04:00", D + "09:50:00-04:00")
+                + hold_pair(10, D + "10:00:00-04:00", D + "10:40:00-04:00"))
+        h = summarize(recs)["hold"]
+        self.assertEqual(h["timed_exits"], 4)
+        self.assertEqual(h["avg_hold_min"], 18.0)
+        self.assertEqual(h["median_hold_min"], 15.0)
+        self.assertEqual(h["min_hold_min"], 2.0)
+        self.assertEqual(h["max_hold_min"], 40.0)
+
+    def test_unheld_exits_count_overall_but_not_by_hold(self):
+        recs = (hold_pair(10, D + "09:00:00-04:00", D + "09:03:00-04:00")
+                + [sig_exit(20)]  # no entry at all: unsignaled + unheld
+                + hold_pair(30, "garbage", D + "09:30:00-04:00")
+                + hold_pair(40, D + "10:00:00-04:00", "2026-10-05")
+                + hold_pair(50, D + "11:00:00-04:00", D + "10:00:00-04:00"))
+        s = summarize(recs)
+        self.assertEqual(s["exits"], 5)
+        self.assertEqual(s["net"], 150.0)
+        self.assertEqual(s["unheld_exits"], 4)
+        self.assertEqual(list(s["by_hold"]), ["0-4m"])
+        self.assertEqual(s["hold"]["timed_exits"], 1)
+
+    def test_unpriced_exit_consumes_entry_but_is_not_unheld(self):
+        recs = ([{"event": "entry", "symbol": "QQQ",
+                  "time": D + "09:00:00-04:00", "reason": "vwap-cross-up"},
+                 {"event": "exit", "symbol": "QQQ",
+                  "time": D + "09:05:00-04:00"}]  # unpriced exit
+                + [sig_exit(25, time=D + "09:20:00-04:00")])
+        s = summarize(recs)
+        self.assertEqual(s["unpriced_exits"], 1)
+        self.assertEqual(s["unheld_exits"], 1)  # only the unpaired priced one
+        self.assertEqual(s["by_hold"], {})
+
+    def test_hold_buckets_carry_path_stats(self):
+        recs = (hold_pair(100, D + "09:00:00-04:00", D + "09:02:00-04:00")
+                + hold_pair(-40, D + "09:10:00-04:00", D + "09:13:00-04:00")
+                + hold_pair(-20, D + "09:20:00-04:00", D + "09:21:00-04:00"))
+        h = summarize(recs)["by_hold"]["0-4m"]
+        self.assertEqual(h["max_drawdown"], 60.0)
+        self.assertEqual(h["current_streak"], -2)
+
+    def test_hold_pairing_is_per_symbol(self):
+        recs = (hold_pair(10, D + "09:00:00-04:00", D + "09:03:00-04:00",
+                          symbol="QQQ")
+                + hold_pair(-5, D + "09:00:00-04:00", D + "10:30:00-04:00",
+                            symbol="SPY"))
+        s = summarize(recs)
+        self.assertEqual(s["by_hold"]["0-4m"]["net"], 10.0)
+        self.assertEqual(s["by_hold"]["60m+"]["net"], -5.0)
+
+
 if __name__ == "__main__":
     unittest.main()

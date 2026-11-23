@@ -98,6 +98,16 @@ else:
             print(f"  by {_label} {_k}: {_v['exits']} exits, "
                   f"net {_v['net']:+.2f}, expectancy {_v['expectancy']:+.2f}, "
                   f"win rate {_v['win_rate']:.1%}")
+    _h = _s["hold"]
+    if _h["timed_exits"]:
+        print(f"  hold time: avg {_h['avg_hold_min']:.1f} min | "
+              f"median {_h['median_hold_min']:.1f} | "
+              f"min {_h['min_hold_min']:.1f} | max {_h['max_hold_min']:.1f} "
+              f"({_h['timed_exits']} timed exits)")
+    for _hold, _v in _s["by_hold"].items():
+        print(f"  by hold {_hold}: {_v['exits']} exits, "
+              f"net {_v['net']:+.2f}, expectancy {_v['expectancy']:+.2f}, "
+              f"win rate {_v['win_rate']:.1%}")
     for _hour, _v in _s["by_hour"].items():
         print(f"  by hour {_hour} ET: {_v['exits']} exits, "
               f"net {_v['net']:+.2f}, expectancy {_v['expectancy']:+.2f}, "
@@ -116,6 +126,9 @@ else:
     if _s["unsignaled_exits"]:
         print(f"  note: {_s['unsignaled_exits']} exits have no entry in "
               f"the ledger and are excluded from the by-signal stats")
+    if _s["unheld_exits"]:
+        print(f"  note: {_s['unheld_exits']} exits have no usable hold "
+              f"time and are excluded from the by-hold stats")
     if _s["recovered_exits"]:
         print(f"  note: {_s['recovered_exits']} exits were on recovered "
               f"positions (P&L measured from recovery price)")

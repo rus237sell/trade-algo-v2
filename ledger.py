@@ -61,11 +61,34 @@ the guard actually sees. A day's final net at/past a limit is
 counted as a guard day; the intraday path can touch a limit earlier
 than the close, so this is a floor, not an exact halt count.
 
+v2.15 adds the hold-time cut: the same stats per holding-period
+bucket (0-4 / 5-14 / 15-29 / 30-59 / 60+ minutes from entry to
+exit), plus overall hold aggregates (mean / median / min / max
+minutes over priced exits with a usable hold). Every earlier cut
+groups an exit by when or why it closed, or what opened it — none
+uses how LONG the position was held, and for a 0DTE scalper that
+is a first-order question: theta burns the position while it is
+held, so a signal whose winners exit in 3 minutes and whose
+losers ride for 40 is a different system from one with the
+reverse shape, and the pooled expectancy cannot tell them apart.
+Hold time comes from the same entry pairing as by_signal: the
+exit's `time` minus its paired entry's `time`. A priced exit with
+no paired entry, a missing/unparseable time on either record, or
+a negative duration (clock skew or a hand-edited ledger) lands in
+no hold bucket and is counted as `unheld_exits`; its P&L still
+counts in every other stat.
+
 Pure functions, no network and no file IO in the math: callers pass
 parsed ledger records in. Reporting only — nothing here changes
 trading, sizing, or guard behavior. Estimates, not broker fills;
 reconcile.py remains the fill-based check.
 """
+
+# Hold-time buckets in session order: (label, upper bound in minutes,
+# exclusive). Anything at or past the last bound lands in HOLD_OVERFLOW.
+HOLD_BUCKETS = (("0-4m", 5.0), ("5-14m", 15.0), ("15-29m", 30.0),
+                ("30-59m", 60.0))
+HOLD_OVERFLOW = "60m+"
 
 # DailyGuard defaults from config.py, mirrored here so this module
 # stays import-free; summarize() callers can override both.
@@ -224,6 +247,75 @@ def _side_key(rec):
     return {"C": "CALL", "P": "PUT"}.get(side, side)
 
 
+def _parse_time(rec):
+    """Aware datetime from a record's `time`, or None.
+
+    Ledger times are ET ISO strings written by bot.py
+    (``2026-10-05T14:32:00-04:00``). A date-only or naive value has
+    no usable offset, so it yields None rather than a guess; both
+    records of a pair must parse for a hold to be computed.
+    """
+    from datetime import datetime
+    t = str(rec.get("time") or "").strip()
+    if not t:
+        return None
+    try:
+        dt = datetime.fromisoformat(t)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo is not None else None
+
+
+def _hold_key(entry_rec, exit_rec):
+    """Hold bucket label for an entry/exit pair, or None.
+
+    Duration is exit time minus entry time in minutes; a missing
+    pair, an unparseable time on either side, or a negative
+    duration yields None (counted as an unheld exit) rather than
+    a garbage bucket.
+    """
+    if entry_rec is None:
+        return None
+    start, end = _parse_time(entry_rec), _parse_time(exit_rec)
+    if start is None or end is None:
+        return None
+    minutes = (end - start).total_seconds() / 60.0
+    if minutes < 0:
+        return None
+    for label, bound in HOLD_BUCKETS:
+        if minutes < bound:
+            return label
+    return HOLD_OVERFLOW
+
+
+def _hold_minutes(entry_rec, exit_rec):
+    """Hold duration in minutes for a pair, or None (same rules as _hold_key)."""
+    if entry_rec is None:
+        return None
+    start, end = _parse_time(entry_rec), _parse_time(exit_rec)
+    if start is None or end is None:
+        return None
+    minutes = (end - start).total_seconds() / 60.0
+    return minutes if minutes >= 0 else None
+
+
+def _hold_aggregates(holds):
+    """Mean / median / min / max over usable hold durations (minutes)."""
+    if not holds:
+        return {"timed_exits": 0, "avg_hold_min": None,
+                "median_hold_min": None, "min_hold_min": None,
+                "max_hold_min": None}
+    ordered = sorted(holds)
+    n = len(ordered)
+    mid = (ordered[n // 2] if n % 2
+           else (ordered[n // 2 - 1] + ordered[n // 2]) / 2)
+    return {"timed_exits": n,
+            "avg_hold_min": round(sum(ordered) / n, 2),
+            "median_hold_min": round(mid, 2),
+            "min_hold_min": round(ordered[0], 2),
+            "max_hold_min": round(ordered[-1], 2)}
+
+
 def _day_aggregates(by_day, guard_target, guard_max_loss):
     """Day-level aggregates over the per-day stats in `by_day`.
 
@@ -267,9 +359,10 @@ def summarize(records, guard_target=DEFAULT_GUARD_TARGET,
     so a gap in the ledger is visible rather than silently treated
     as a $0 trade. Returns the overall stats (including drawdown and
     streak stats from _path_stats) plus `by_reason`, `by_symbol`,
-    `by_side`, `by_signal`, `by_day`, and `by_hour` breakdowns (same
+    `by_side`, `by_signal`, `by_hold`, `by_day`, and `by_hour`
+    breakdowns (same
     stat shape; `by_day` values also carry that day's `entries`),
-    `entries`, `recovered_exits`, and `days` (day-level aggregates
+    `entries`, `recovered_exits`, `hold` (hold-time aggregates), and `days` (day-level aggregates
     from _day_aggregates, judged against guard_target /
     guard_max_loss).
 
@@ -291,6 +384,14 @@ def summarize(records, guard_target=DEFAULT_GUARD_TARGET,
     everywhere except `by_signal` and is counted as
     `unsignaled_exits`; an entry whose `reason` is missing buckets
     its exit under "?".
+
+    `by_hold` reuses that same pairing: a priced exit buckets by
+    the minutes between its entry's `time` and its own `time`
+    (HOLD_BUCKETS order, then HOLD_OVERFLOW). A priced exit whose
+    hold cannot be computed — no paired entry, an unparseable time
+    on either record, or a negative duration — counts everywhere
+    except `by_hold` and is counted as `unheld_exits`. `hold`
+    aggregates the usable durations (mean / median / min / max).
     """
     entries = 0
     unpriced_exits = 0
@@ -298,11 +399,14 @@ def summarize(records, guard_target=DEFAULT_GUARD_TARGET,
     undated_exits = 0
     untimed_exits = 0
     unsignaled_exits = 0
+    unheld_exits = 0
     all_pnls = []
+    holds = []
     by_reason = {}
     by_symbol = {}
     by_side = {}
     by_signal = {}
+    by_hold = {}
     by_hour = {}
     day_pnls = {}    # date -> [exit P&Ls in ledger order]
     day_entries = {}  # date -> entry count
@@ -322,6 +426,7 @@ def summarize(records, guard_target=DEFAULT_GUARD_TARGET,
         # check: an unpriced exit still closed the position, so it
         # consumes the entry either way.
         signal = None
+        entry_rec = None
         queue = open_entries.get(rec.get("symbol") or "?") or []
         if queue:
             occ = rec.get("occ")
@@ -349,6 +454,12 @@ def summarize(records, guard_target=DEFAULT_GUARD_TARGET,
             unsignaled_exits += 1
         else:
             by_signal.setdefault(signal, []).append(pnl)
+        hold_key = _hold_key(entry_rec, rec)
+        if hold_key is None:
+            unheld_exits += 1
+        else:
+            by_hold.setdefault(hold_key, []).append(pnl)
+            holds.append(_hold_minutes(entry_rec, rec))
         hour = _hour_key(rec)
         if hour is None:
             untimed_exits += 1
@@ -366,10 +477,16 @@ def summarize(records, guard_target=DEFAULT_GUARD_TARGET,
     out["undated_exits"] = undated_exits
     out["untimed_exits"] = untimed_exits
     out["unsignaled_exits"] = unsignaled_exits
+    out["unheld_exits"] = unheld_exits
+    out["hold"] = _hold_aggregates(holds)
     out["by_reason"] = {k: _stats(v) for k, v in sorted(by_reason.items())}
     out["by_symbol"] = {k: _stats(v) for k, v in sorted(by_symbol.items())}
     out["by_side"] = {k: _stats(v) for k, v in sorted(by_side.items())}
     out["by_signal"] = {k: _stats(v) for k, v in sorted(by_signal.items())}
+    # Hold buckets print in session order, not alphabetical order.
+    _hold_order = [label for label, _ in HOLD_BUCKETS] + [HOLD_OVERFLOW]
+    out["by_hold"] = {k: _stats(by_hold[k]) for k in _hold_order
+                      if k in by_hold}
     out["by_hour"] = {k: _stats(v) for k, v in sorted(by_hour.items())}
     by_day = {}
     for day in sorted(day_pnls):
